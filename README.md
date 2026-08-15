@@ -165,4 +165,6 @@ run `psd serve`.
 
 ## License
 
-MIT. Copied modules from `apd` are MIT OR Apache-2.0; see their headers.
+MIT. Modules copied or adapted from `apd` (MIT OR Apache-2.0) are used under
+their MIT option; each carries a header naming its origin, and
+[NOTICE.md](NOTICE.md) reproduces the licence notice as required.
