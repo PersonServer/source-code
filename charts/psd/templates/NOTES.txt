@@ -1,0 +1,45 @@
+psd (AAuth Person Server) — release {{ .Release.Name }}
+
+  AAuth is an IETF Internet-Draft, not yet a released standard. psd tracks
+  the drafts and says so at startup.
+
+Image:       {{ include "psd.image" . }}
+Issuer:      {{ .Values.issuer }}   (permanent — it is in every sub and iss)
+State:       {{ if .Values.persistence.enabled }}PVC {{ include "psd.dataClaimName" . }} at /var/lib/psd{{ else }}emptyDir — LOST ON RESTART{{ end }}
+Missions:    {{ .Values.config.missions.enabled }}   Federation: {{ .Values.config.federation.enabled }}
+
+{{- if and (not .Values.keys.existingSecret) (not .Values.keys.keysJson) }}
+
+⚠  NO SIGNING KEYS CONFIGURED. The pod will not start. Create keys and point
+   the chart at them:
+     psd keygen --keys psd-keys.json
+     kubectl create secret generic psd-keys --from-file=psd-keys.json -n {{ .Release.Namespace }}
+     helm upgrade {{ .Release.Name }} ... --set keys.existingSecret=psd-keys
+{{- end }}
+
+Add the first person (prints a one-time enrolment link; open it in a browser
+at the issuer's hostname to register a passkey):
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "psd.fullname" . }} -- \
+    psd person add --name "Alice" --config /etc/psd/psd.json
+
+Headless approvals, if nobody is watching a browser:
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "psd.fullname" . }} -- \
+    psd pending list --config /etc/psd/psd.json
+
+Reach it in-cluster:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "psd.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  curl -s http://127.0.0.1:{{ .Values.service.port }}/healthz
+  curl -s http://127.0.0.1:{{ .Values.service.port }}/.well-known/aauth-person.json
+
+{{- if .Values.ingress.enabled }}
+
+Publicly at: https://{{ .Values.ingress.host }}   (must equal `issuer`; the
+proxy must preserve the Host header — agents sign it)
+{{- else }}
+
+Expose it over TLS so `issuer` ({{ .Values.issuer }}) serves
+/.well-known/aauth-person.json and people can reach the dashboard by hostname
+(passkeys need one) — enable `ingress` or front it with your load balancer.
+{{- end }}
+
+Docs: https://personserver.dev/docs/install.html

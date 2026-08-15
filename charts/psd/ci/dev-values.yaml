@@ -1,0 +1,26 @@
+# Values used by `helm lint`/`helm template` in CI to exercise the templates
+# end to end (dev-only; inline keys, webhook, missions, ingress).
+issuer: https://ps.ci.example
+image:
+  tag: "ci"
+keys:
+  keysJson: |
+    {"active":"ps-ci","keys":[{"kid":"ps-ci","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","created_at":0}],"pairwise_secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+config:
+  missions:
+    enabled: true
+  federation:
+    enabled: true
+  notify:
+    channels: ["web", "webhook"]
+    webhookUrl: https://hooks.ci.example/psd
+  metadata:
+    name: CI Person Server
+    description: Manage which agents act for you.
+  auditLogFile: /var/lib/psd/audit.log
+extraConfig:
+  jwks_cross_origin_hosts: ["keys.ci.example"]
+ingress:
+  enabled: true
+  className: nginx
+  host: ps.ci.example

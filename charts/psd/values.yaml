@@ -1,0 +1,169 @@
+# Default values for psd.
+# See charts/psd/README.md for the guide and production notes.
+# Adapted from apd (MIT OR Apache-2.0), github.com/AgentProvider/source-code.
+
+# psd keeps its state in SQLite, so it runs as exactly one replica with a
+# persistent volume. The chart refuses replicaCount > 1.
+replicaCount: 1
+
+image:
+  repository: ghcr.io/personserver/psd
+  # -- Image tag. Defaults to the chart's appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# -- The Person Server's public HTTPS server identifier. PERMANENT: it lands
+# in every directed `sub` and every token's `iss`. MUST be the exact origin
+# that serves /.well-known/aauth-person.json (what your Ingress exposes), and
+# a hostname — passkeys do not work on IP-address origins.
+issuer: "https://ps.example.com"
+
+# ---------------------------------------------------------------- psd config
+# These map onto psd's JSON config; the chart renders /etc/psd/psd.json from
+# them. `extraConfig` is deep-merged last for anything not surfaced here.
+config:
+  personTokenTtlSecs: 3600
+  authTokenTtlSecs: 3600
+  signatureWindowSecs: 60
+  resourceTokenMaxAgeSecs: 300
+  retentionSlackSecs: 3600
+  missions:
+    enabled: false
+    defaultTtlSecs: 86400
+  federation:
+    enabled: false
+  notify:
+    # "web" always; add "webhook" and set webhookUrl (https) to be notified
+    # when a decision is pending. The webhook never carries the code.
+    channels: ["web"]
+    webhookUrl: ""
+  limits:
+    resourcesPerAgentPerDay: 50
+    codeAttempts: 5
+    pendingTtlSecs: 600
+  ui:
+    sessionTtlSecs: 43200
+  # Published in /.well-known/aauth-person.json and shown on every screen.
+  metadata:
+    name: ""
+    description: ""
+    logoUri: ""
+    documentationUri: "https://personserver.dev/docs/"
+    tosUri: ""
+    policyUri: ""
+  # Set only when a proxy rewrites Host (better: make it preserve Host).
+  expectedAuthority: ""
+  # Emit structured audit events to a file on the state volume in addition
+  # to stderr (empty = stderr only).
+  auditLogFile: ""
+  # DEV ONLY — accept an http:// issuer and private-network egress. Never in prod.
+  insecureDevMode: false
+
+# -- Arbitrary extra keys deep-merged into psd.json (highest precedence).
+# Example:
+#   extraConfig:
+#     jwks_cross_origin_hosts: ["keys.example.com"]
+extraConfig: {}
+
+# ---------------------------------------------------------------- state
+# The SQLite database (person records, bindings, consent history, directed
+# identifiers) lives on this volume. It is the record of who allowed what:
+# keep persistence on and back the volume up.
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  # Use an existing PVC instead of creating one.
+  existingClaim: ""
+
+# ---------------------------------------------------------------- signing keys
+# psd's Ed25519 signing keys and the pairwise secret. Rotate with
+# `psd keygen --rotate` outside the cluster and update the Secret; the
+# pairwise secret must never change or every directed `sub` changes with it.
+keys:
+  # Recommended: reference a Secret you created with:
+  #   psd keygen --keys psd-keys.json
+  #   kubectl create secret generic psd-keys --from-file=psd-keys.json
+  existingSecret: ""
+  existingSecretKey: "psd-keys.json"
+  # Dev/quick-start: paste the contents of psd-keys.json here and the chart
+  # creates the Secret. Keep out of Git for anything real.
+  keysJson: ""
+
+# ---------------------------------------------------------------- networking
+service:
+  type: ClusterIP
+  port: 8430
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  # The proxy MUST preserve the Host header: agents sign `@authority` and psd
+  # checks it against the issuer host. Most ingress controllers do by default.
+  annotations: {}
+  # host that serves the issuer origin; must match `issuer`.
+  host: ps.example.com
+  path: /
+  pathType: Prefix
+  tls:
+    enabled: true
+    secretName: psd-tls
+
+# ---------------------------------------------------------------- workload
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+# Hardened defaults matching the distroless nonroot image (uid 65532).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 3
+  periodSeconds: 15
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 2
+  periodSeconds: 10
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []

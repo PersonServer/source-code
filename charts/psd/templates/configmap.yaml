@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "psd.fullname" . }}
+  labels:
+    {{- include "psd.labels" . | nindent 4 }}
+data:
+  psd.json: |-
+    {{- include "psd.configJson" . | nindent 4 }}
