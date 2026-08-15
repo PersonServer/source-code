@@ -158,6 +158,41 @@ description: A Person Server is the part of AAuth that speaks for the human — 
   </div>
 </section>
 
+<!-- ============================================================ sandbox -->
+<section class="section" id="sandbox">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Hosted sandbox</span>
+      <h2>Try it without running anything.</h2>
+      <p>Build and test agents, providers and resources against a live Person Server — no local setup. Pairs with the <a href="https://agentprovider.dev/docs/sandbox.html">Agent Provider sandbox</a> for the full “this agent, acting for this person” flow.</p>
+    </div>
+
+    <div class="code">
+      <div class="code-head"><span class="tag">bash</span><button class="copy" data-copy="cmd-sandbox" type="button"></button></div>
+<pre id="cmd-sandbox"><span class="c"># the live Person Server — discovery document relying parties fetch</span>
+<span class="p">$</span> curl -s https://sandbox.personserver.dev/.well-known/aauth-person.json
+
+<span class="c"># the keys every verifier checks person and auth tokens against</span>
+<span class="p">$</span> curl -s https://sandbox.personserver.dev/.well-known/jwks.json</pre>
+    </div>
+
+    <div class="hero-actions" style="margin-top:22px">
+      <a class="btn btn-primary" href="{{ '/docs/sandbox.html' | relative_url }}">
+        Use the sandbox
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+      </a>
+      <a class="btn btn-ghost" href="{{ '/docs/install.html' | relative_url }}">Or run your own</a>
+    </div>
+
+    <div style="margin-top:26px">
+      <p class="demo-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9l-8 13.9A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3.2l-8-13.9a2 2 0 0 0-3.4 0z"/></svg>
+        <span><b>Development only.</b> Sandbox tokens have no production value. Test people are issued on request (passkeys, no passwords); state may be reset on redeploy. No SLA.</span>
+      </p>
+    </div>
+  </div>
+</section>
+
 <!-- ============================================================ quickstart -->
 <section class="section" id="install">
   <div class="wrap">
@@ -296,6 +331,12 @@ description: A Person Server is the part of AAuth that speaks for the human — 
         <span class="k">reference</span>
         <h3>HTTP API</h3>
         <p>Discovery, <code>/person</code>, <code>/pending</code>, <code>/token</code>, <code>/revoke</code>, <code>/mission</code>, and the error vocabulary.</p>
+        <span class="go">Read <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+      <a class="doclink" href="{{ '/docs/sandbox.html' | relative_url }}">
+        <span class="k">for developers</span>
+        <h3>Hosted sandbox</h3>
+        <p>A live Person Server at <code>sandbox.personserver.dev</code> to build and test against — test people on request, no local setup.</p>
         <span class="go">Read <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
       </a>
       <a class="doclink" href="https://agentprovider.dev">
