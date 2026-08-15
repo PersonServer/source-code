@@ -192,10 +192,13 @@ code, kbd, pre { font-family: var(--font-mono); font-size: 0.9em; }
 .hero-aside a:hover { text-decoration-color: var(--accent); }
 
 /* reveal-on-load */
-.reveal { opacity: 0; transform: translateY(12px); animation: reveal .7s cubic-bezier(.2,.7,.2,1) forwards; }
+/* The resting state is fully visible; only the keyframes hide it. If the
+   animation never runs (a reader mode, an old engine, a screenshot tool),
+   the hero is still there. `both` applies the `from` state during the delay. */
+.reveal { animation: reveal .7s cubic-bezier(.2,.7,.2,1) both; }
 .reveal.d1 { animation-delay: .05s; } .reveal.d2 { animation-delay: .12s; }
 .reveal.d3 { animation-delay: .19s; } .reveal.d4 { animation-delay: .26s; } .reveal.d5 { animation-delay: .34s; }
-@keyframes reveal { to { opacity: 1; transform: none; } }
+@keyframes reveal { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 
 /* ---------------------------------------------------------------- signature: the consent screen */
 .consent {
@@ -513,6 +516,5 @@ code, kbd, pre { font-family: var(--font-mono); font-size: 0.9em; }
 
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
-  .reveal { opacity: 1; transform: none; }
   .consent .actions .b.approve svg path { stroke-dashoffset: 0; }
 }
