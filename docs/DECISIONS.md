@@ -395,6 +395,119 @@ Conventions: **D-n** = decision; ✅ agreed with the `apd` reviewer;
   `psd invite` (token stored hashed, ~15 min, single use); the first passkey is
   registered there. There are no passwords.
 
+## Enterprise SSO — OIDC login for persons (`person_auth.method = "oidc"`)
+
+Plan, written before the callback handler, for review. The premise: in psd
+SSO authenticates a *human in a browser*; it never touches the agent
+surface, and it never decides consent.
+
+- **D-66 🟡 Config.** `person_auth.oidc = { issuer, client_id,
+  client_secret_file, scopes (default ["openid","profile","email"]),
+  required_claims {}, tenant_claim, display_name_claims (default
+  ["name","preferred_username","email"]), provision (default true) }`.
+  `client_secret_file` for the same reason `keys_file` is a file; read at
+  startup into a redacted runtime struct, never into `Config`. Validation:
+  block required when `method = "oidc"`, `https://` issuer (http only in
+  dev mode), `openid` in scopes, secret file readable. `redirect_uri` is
+  fixed at `{issuer}/login/oidc/callback` and printed at startup so the
+  operator can register it at the IdP.
+- **D-67 🟡 `method: "oidc"` is additive: SSO is offered *in addition to*
+  passkeys, per person.** Existing passkeys keep working, new ones can be
+  added, enrolment links still work; the login page shows both buttons. An
+  org can roll out SSO while an operator keeps a passkey for break-glass. If
+  an operator wants passkeys off they cannot — this is documented loudly
+  rather than made a switch, because the switch's failure mode is silently
+  locking people out.
+- **D-68 🟡 Discovery at startup, keys on the agent-token floor.**
+  `{issuer}/.well-known/openid-configuration` is fetched once at startup
+  through the same egress admission as everything else (a typo fails fast);
+  its `issuer` must equal the configured one byte-for-byte (OIDC Discovery
+  §4.3); `authorization_endpoint`, `token_endpoint`, `jwks_uri` are taken
+  from it. `jwks_uri` must be same-origin with the issuer unless its host is
+  in `jwks_cross_origin_hosts` (Google Workspace publishes its keys on
+  `www.googleapis.com`; the operator lists it). ID-token keys are a separate
+  small cache (RSA/ECDSA/EdDSA keys, `anyjwk` adapted from apd) refreshed on
+  unknown `kid` under the same once-per-minute floor and 24 h cap; a fetch
+  failure is a `503` login page, not a verdict (D-65).
+- **D-69 🟡 Authorization Code + PKCE (S256), `state` and `nonce` bound to a
+  single-use login row and a cookie.** `GET /login/oidc?next=` creates
+  `oidc_login(id_hash, state_hash, nonce_hash, code_verifier, next,
+  link_person_id, created_at, expires_at = +10 min, used_at)` and sets
+  `psd_oidc=<id>` (`HttpOnly; SameSite=Lax; Secure; Path=/login/oidc;
+  Max-Age=600`), then redirects to the IdP with `state`, `nonce`,
+  `code_challenge`. On `GET /login/oidc/callback`: (1) the cookie names the
+  row — unknown, used or expired → "start again"; the row is marked used
+  *before* anything else and the cookie cleared, so a callback URL is
+  spent on first presentation whatever happens next; (2) the `state` query
+  parameter must equal the row's (hash compare, constant time) — an
+  attacker who starts their own login and lures the victim to *their*
+  callback URL fails here because the victim's cookie names a different
+  row (or none), which is the login-CSRF / session-fixation case; (3) an
+  `error` parameter is shown and audited; (4) the code is exchanged at
+  `token_endpoint` with `code_verifier` and `client_secret_basic`, over
+  egress admission; (5) the ID token is verified: `alg` in {RS256/384/512,
+  ES256/384, EdDSA/Ed25519} (never `none`), `kid` → key, signature, `iss` ==
+  configured, `aud` contains `client_id` (and `azp == client_id` when `aud`
+  is plural), `exp`, `iat`, and **`nonce` equals the row's** (hash compare)
+  — the row, not the cookie, is what binds `nonce`, so an ID token replayed
+  into another login attempt cannot match; (6) `required_claims` are
+  evaluated. Only then a session is created — the same session as a passkey
+  login — and the browser is sent to the validated `next`.
+- **D-70 🟡 The person is keyed on `(idp_iss, idp_sub)`, never email.**
+  Table `person_identity(person_id, idp_iss, idp_sub, email, linked_at,
+  last_login_at, UNIQUE(idp_iss, idp_sub))`. Email is mutable and
+  reassignable — an offboarded `alice@` handed to a new Alice would inherit
+  bindings and consents; the same reasoning as `(agent_iss, agent_sub)`,
+  with a worse failure. On a successful login: known identity → that
+  person; unknown identity with a `link_person_id` (a signed-in passkey
+  person pressed "Connect SSO" on the sign-in-methods page) → linked to
+  that person; unknown and `provision` on → a person is created just in
+  time (display name from `display_name_claims`, first present); unknown
+  and `provision` off → refused. An identity already linked to another
+  person cannot be linked again. `email` is stored for display only.
+- **D-71 🟡 `required_claims` uses apd's matcher, extended for arrays.**
+  Claim path (dotted, longest-key-first lookup) → matcher: exact string,
+  trailing-`*` prefix, or array of those (any-of). Because IdP `groups`
+  claims are arrays, an array-valued *actual* claim satisfies the matcher
+  when any element does; apd's matcher returns false there. Failure is a
+  `403` page ("your account is not permitted to use this Person Server")
+  and an audit event `oidc_login_denied {reason: "claims"}` — no person is
+  created and nothing is linked.
+- **D-72 🟡 Authentication is not consent.** Nothing in the SSO path
+  touches `consent::approve`. The consent screen still renders and still
+  requires the explicit `POST /consent/{id}` with the session's CSRF token;
+  an IdP session shortens the walk to the button, never presses it. A test
+  pins this: an SSO-authenticated `GET /consent/{id}` leaves the pending
+  request pending.
+- **D-73 🟡 `tenant`.** `tenant_claim` names an ID-token claim whose value is
+  stored on the person (`person.tenant`, refreshed on each SSO login) and
+  issued into every person token as `tenant` (§Person Token Structure: "the
+  organization the person belongs to"; not part of the identifier). Retained
+  in the person-token record, so step 6 of resource-token verification and
+  the auth token carry it unchanged — which is where SSO pays off downstream:
+  a resource applies org policy without knowing the IdP. Under call
+  chaining the upstream token's `tenant` wins when present.
+- **D-74 🟡 Deprovisioning is deliberate: `psd person deactivate ID`.** The
+  IdP deactivating a leaver stops logins; it does not touch bindings or
+  consents, so their agents keep working until tokens expire. The command
+  sets `person.status = deactivated`, revokes every active binding (with the
+  consents and the outbound auth-token sweep the dashboard button does),
+  ends active missions, deletes sessions, and refuses every future login —
+  passkey or SSO — and every enrolment link; audited `person_deactivated
+  {via: cli}`. `psd person activate ID` reverses the status (not the
+  revocations). Re-checking at the IdP happens for free on every
+  interactive SSO login (a refused or claim-failing login is a refused
+  login). SCIM is not built; the limitation — that offboarding is a step
+  the operator runs — is stated in the docs.
+- **D-75 🟡 Audit and misc.** Logins are `person_login {method: "passkey" |
+  "oidc", idp_iss, idp_sub}` so an SSO login is distinguishable from a
+  passkey one; provisioning is `person_provisioned {via: "oidc"}`. Logout is
+  local (session deleted; no RP-initiated logout at the IdP). Startup prints
+  `person_auth: passkeys + oidc (issuer, redirect_uri)`. `claims_supported`
+  in metadata stays `["sub"]` (identity scopes beyond `sub` are not in this
+  pass). Not built: SCIM, SAML, multi-tenant shape C, self-service
+  deactivation.
+
 ## Vocabulary
 
 - "Agent Provider" (never "Agent Server", the pre-`-01` name).
