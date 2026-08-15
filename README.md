@@ -152,7 +152,7 @@ its header; if they stay identical they will be extracted into a shared crate.
 ## Development
 
 ```sh
-cargo test                                   # 128 tests, no network needed
+cargo test                                   # 129 tests, no network needed
 cargo clippy --workspace --all-targets       # zero warnings is the bar
 cargo fmt --all -- --check
 ```

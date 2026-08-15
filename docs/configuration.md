@@ -85,7 +85,10 @@ Party using Authorization Code + PKCE):
 | `oidc.display_name_claims` | `["name","preferred_username","email"]` | Tried in order for a newly provisioned person's display name. |
 | `oidc.provision` | `true` | Create a person on first sign-in when no person is linked to the identity (just-in-time). `false`: only identities an existing person connected from their sign-in-methods page may sign in. |
 
-Identities are keyed on the provider's `(issuer, sub)`, never on email —
+Provider-by-provider settings (Okta, Entra ID, Google Workspace, Keycloak,
+Auth0) and the failures each makes likely are in
+[Identity providers](identity-providers.md). Identities are keyed on the
+provider's `(issuer, sub)`, never on email —
 email is mutable and reassignable, and an offboarded `alice@` handed to a
 new Alice must not inherit the old Alice's agents and consents. Google
 Workspace publishes its keys on `www.googleapis.com`; list that host in

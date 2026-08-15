@@ -841,6 +841,17 @@ mod tests {
         let mut g = good.clone();
         g["issuer"] = "https://acme.okta.com/".into();
         assert!(parse(base(g)).unwrap_err().contains("issuer"));
+        // An OIDC issuer is a URL, not an AAuth server identifier: paths are
+        // normal (Okta custom authorization servers, Entra, Keycloak realms).
+        for iss in [
+            "https://acme.okta.com/oauth2/default",
+            "https://login.microsoftonline.com/9188040d-6c67-4c5b-b112-36a304b66dad/v2.0",
+            "https://kc.acme.example/realms/employees",
+        ] {
+            let mut g = good.clone();
+            g["issuer"] = iss.into();
+            assert!(parse(base(g)).is_ok(), "{iss}");
+        }
         let mut g = good.clone();
         g["scopes"] = serde_json::json!(["profile"]);
         assert!(parse(base(g)).unwrap_err().contains("openid"));

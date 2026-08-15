@@ -5124,9 +5124,9 @@ mod oidc_tests {
     use std::collections::HashMap;
     use std::sync::Mutex as StdMutex;
 
-    /// An OpenID Connect provider in a box: discovery, an ES256 JWKS, and a
-    /// token endpoint that checks the client secret, spends the code once,
-    /// and verifies the PKCE verifier against the challenge the authorization
+    /// An OpenID Connect provider in a box: discovery, a JWKS, and a token
+    /// endpoint that checks the client secret, spends the code once, and
+    /// verifies the PKCE verifier against the challenge the authorization
     /// step recorded. The "browser visit" to the authorization endpoint is
     /// simulated by [`MockIdp::authorize`], which does what a real IdP does
     /// after the person authenticates: mint a code bound to the request's
@@ -5139,6 +5139,8 @@ mod oidc_tests {
         codes: Arc<StdMutex<HashMap<String, (String, String)>>>,
         /// Claims minted into every ID token (over the standard ones).
         claims: Arc<StdMutex<serde_json::Value>>,
+        /// (`aud` minted as an array, with `azp` naming us).
+        aud_array: Arc<StdMutex<(bool, bool)>>,
         /// Sabotage knobs.
         nonce_override: Arc<StdMutex<Option<String>>>,
         kid_override: Arc<StdMutex<Option<String>>>,
@@ -5146,213 +5148,350 @@ mod oidc_tests {
         _handle: tokio::task::JoinHandle<()>,
     }
 
-    fn jwk_for(key: &p256::ecdsa::SigningKey, kid: &str) -> serde_json::Value {
-        let point = key.verifying_key().to_encoded_point(false);
-        serde_json::json!({
-            "kty": "EC", "crv": "P-256", "kid": kid, "alg": "ES256", "use": "sig",
-            "x": aauth_core::b64::encode(point.x().unwrap()),
-            "y": aauth_core::b64::encode(point.y().unwrap()),
-        })
+    /// How the mock signs and what its documents look like: a generic ES256
+    /// provider, or Okta's shapes (org authorization server, RS256, the
+    /// exact discovery and JWKS fields Okta emits) with our own RSA key.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Flavour {
+        Es256,
+        Okta,
     }
 
-    fn sign_es256(
-        key: &p256::ecdsa::SigningKey,
-        header: &serde_json::Value,
-        payload: &serde_json::Value,
-    ) -> String {
-        let h = aauth_core::b64::encode(header.to_string().as_bytes());
-        let p = aauth_core::b64::encode(payload.to_string().as_bytes());
-        let input = format!("{h}.{p}");
-        let sig: p256::ecdsa::Signature = key.sign(input.as_bytes());
-        format!("{input}.{}", aauth_core::b64::encode(&sig.to_bytes()))
+    /// A 2048-bit RSA key generated for these tests only (PKCS#8 DER,
+    /// standard base64) and its public components as a JWK carries them.
+    const TEST_RSA_PKCS8_B64: &str = "MIIEowIBAAKCAQEAo4C1RClQU6KcxDCQX6LQKkN5M0R+zfACgTI6FFRrTRBRqtNkzQOmON1wHV5NdWPEQbOg7tsC25PR5RJTHXoTZlicQ/ZTiKgFKlSPODxGE86Mve2YFkrY3FUHwGKft1peWvL8tv8wBcGbCr/scn7uIzQm4Io8wcZGDKyNBbBa90bljVnoSkfWcyQoeTmZXyoaV7Bdx7PMmE7pqcO+jWuE5Ic6sc6vqxuBmB7YSMmmhwRSXym4/noH9S+vB12AxXzWvuR2vvAZefD+IGeXsptdSAXu13aNJ1dEzdHQt4Jg5bTTdwJViYISrSi2XET5A2ky3prWMvtsMf/CQhYMTif0nQIDAQABAoIBAAU5s1Fa2qjZnRX+EVclHm8DWgfD7COLxKC5aLbGnelIGLwTZnjQ4YqWtSMTJPmX9yk8YuvPTw+ScVZXWBWslZsjQNdBM5k9+XBJZIxhDMJMSx40zjQEL1sXUpiY7k7PUg2pD1+P10qPzfMxgA6GtPimDYoGkPuGaS21hApHARk++zoycuTVkPTn3OAR+5OS2D/xc5klk9mZLZ/k78Sdau5/IMqp0vzYzvEmxqxcRSxUwP4xUhpTe2aB/8py5OqxFQ/3tgZrGXI873+Ls9MsJvvWigMOvCOlTBz/Aie6CFSb0Jv5EYyKUrbdtO0XcHSrCxA0WcG9eF1T9dCU6zGycscCgYEAzsEPgDGgjU29panwZk+LX1v64ynyugf6KwUzPzrol7VAjIVxH+KL5vtzA+zKVHRgfkJCAhpSzJxGN+iBYktHywAT6RWM+y6TwNToBfWGqNc6BcLNJpmmGdZ5t5Xrwoiew5ndmkHwqodU/bimCBVxI5Tfi/Wx8n9rEv3C5Ve4i08CgYEAynJfaw5kNbc8nVc3pGrugPPNAJALJCSGdoVzY1OWuKNxi8rggdQyfpD42kVFOqeEzhG+jLSolERj9ZGLltu+JrCaaJyZdr50EQ1C5oRPajCv0SyGyXKwKIwEDNGhXg5bCAGbGophKHILPJsFPNFt+nrBGbR9WNgAxmxi0wqGFlMCgYB5ncqWZ5q/Q5lolzvXkray0xITCZvDnemj4J0ydl5WzsE3Z08RqFsO9Z3EE0c4wnP4ENVvEzjdLpeHT3a78Pg8CsGre4fAQLec2B/bUX9yVZfFx76RFBRGYoiaWs+hUGfDOwDFOkBsrspprHHNk39HpMySMWYI9LZxJ1+7NAxTtQKBgD0sIC7+M0OT8cntX8/by+PFR43C+MrcCpFns70wtdtm79l43Sv9zaA2+CskQU3+7n9CF1z2/fWHUNkUOKTGE4gnVxEDONALrpC0fCGhm0mQGqBPHw9iC17FKDgjY+pC1jjuG0sCw2bwRvryMLv24I+OZij5Q+MDqgBLIfV5OZknAoGBAJKj8E7qY6BCCf7jx3RbXG2VQ356pYreXL9oOARwwPBuXTT9S3Z7t7W2bzwgsHKdoQ8zePUb3cifQgz9y7gQEQ0AwlyC7ilwScswNSNbISLFJ6+KNnNgEQXiBBdjD92plWtB77O4oII+iKdZt2bK9lKE9RhHx4/0yoGIiJgVl7Tv";
+    const TEST_RSA_N: &str = "o4C1RClQU6KcxDCQX6LQKkN5M0R-zfACgTI6FFRrTRBRqtNkzQOmON1wHV5NdWPEQbOg7tsC25PR5RJTHXoTZlicQ_ZTiKgFKlSPODxGE86Mve2YFkrY3FUHwGKft1peWvL8tv8wBcGbCr_scn7uIzQm4Io8wcZGDKyNBbBa90bljVnoSkfWcyQoeTmZXyoaV7Bdx7PMmE7pqcO-jWuE5Ic6sc6vqxuBmB7YSMmmhwRSXym4_noH9S-vB12AxXzWvuR2vvAZefD-IGeXsptdSAXu13aNJ1dEzdHQt4Jg5bTTdwJViYISrSi2XET5A2ky3prWMvtsMf_CQhYMTif0nQ";
+    const TEST_RSA_E: &str = "AQAB";
+
+    enum Signer {
+        Es256(p256::ecdsa::SigningKey),
+        Rs256(Arc<ring::signature::RsaKeyPair>),
+    }
+
+    impl Signer {
+        fn jwk(&self, kid: &str) -> serde_json::Value {
+            match self {
+                Signer::Es256(key) => {
+                    let point = key.verifying_key().to_encoded_point(false);
+                    serde_json::json!({
+                        "kty": "EC", "crv": "P-256", "kid": kid, "alg": "ES256", "use": "sig",
+                        "x": aauth_core::b64::encode(point.x().unwrap()),
+                        "y": aauth_core::b64::encode(point.y().unwrap()),
+                    })
+                }
+                Signer::Rs256(_) => serde_json::json!({
+                    "kty": "RSA", "alg": "RS256", "kid": kid, "use": "sig",
+                    "e": TEST_RSA_E, "n": TEST_RSA_N,
+                }),
+            }
+        }
+        fn alg(&self) -> &'static str {
+            match self {
+                Signer::Es256(_) => "ES256",
+                Signer::Rs256(_) => "RS256",
+            }
+        }
+        fn sign(&self, header: &serde_json::Value, payload: &serde_json::Value) -> String {
+            let h = aauth_core::b64::encode(header.to_string().as_bytes());
+            let p = aauth_core::b64::encode(payload.to_string().as_bytes());
+            let input = format!("{h}.{p}");
+            let sig = match self {
+                Signer::Es256(key) => {
+                    let sig: p256::ecdsa::Signature = key.sign(input.as_bytes());
+                    sig.to_bytes().to_vec()
+                }
+                Signer::Rs256(pair) => {
+                    let mut out = vec![0u8; pair.public().modulus_len()];
+                    pair.sign(
+                        &ring::signature::RSA_PKCS1_SHA256,
+                        &ring::rand::SystemRandom::new(),
+                        input.as_bytes(),
+                        &mut out,
+                    )
+                    .unwrap();
+                    out
+                }
+            };
+            format!("{input}.{}", aauth_core::b64::encode(&sig))
+        }
+    }
+
+    /// The token endpoint's behaviour, shared by every connection.
+    #[derive(Clone)]
+    struct IdpState {
+        issuer: String,
+        client_id: String,
+        secret: String,
+        signer: Arc<Signer>,
+        kid: String,
+        codes: Arc<StdMutex<HashMap<String, (String, String)>>>,
+        claims: Arc<StdMutex<serde_json::Value>>,
+        nonce_override: Arc<StdMutex<Option<String>>>,
+        kid_override: Arc<StdMutex<Option<String>>>,
+        alg_none: Arc<StdMutex<bool>>,
+        aud_array: Arc<StdMutex<(bool, bool)>>,
+        /// (discovery, token, jwks) paths.
+        paths: (&'static str, &'static str, &'static str),
+        disc_s: String,
+        jwks_s: String,
+    }
+
+    impl IdpState {
+        fn handle(
+            &self,
+            method: Method,
+            path: &str,
+            auth: Option<&str>,
+            body: &[u8],
+        ) -> (u16, String) {
+            let (disc_path, token_path, jwks_path) = self.paths;
+            match (method, path) {
+                (Method::GET, p) if p == disc_path => (200, self.disc_s.clone()),
+                (Method::GET, p) if p == jwks_path => (200, self.jwks_s.clone()),
+                (Method::POST, p) if p == token_path => self.token(auth, body),
+                _ => (404, "{}".to_string()),
+            }
+        }
+
+        fn token(&self, auth: Option<&str>, body: &[u8]) -> (u16, String) {
+            let form = crate::ui::parse_form(body);
+            let expected = format!(
+                "Basic {}",
+                aauth_core::b64::encode_std(
+                    format!("{}:{}", self.client_id, self.secret).as_bytes()
+                )
+            );
+            if auth != Some(expected.as_str()) {
+                return (
+                    401,
+                    serde_json::json!({"error":"invalid_client"}).to_string(),
+                );
+            }
+            if form.get("grant_type").map(String::as_str) != Some("authorization_code") {
+                return (
+                    400,
+                    serde_json::json!({"error":"unsupported_grant_type"}).to_string(),
+                );
+            }
+            let code = form.get("code").cloned().unwrap_or_default();
+            let Some((nonce, challenge)) = self.codes.lock().unwrap().remove(&code) else {
+                return (
+                    400,
+                    serde_json::json!({"error":"invalid_grant"}).to_string(),
+                );
+            };
+            let verifier = form.get("code_verifier").cloned().unwrap_or_default();
+            let got = aauth_core::b64::encode(&sha2::Sha256::digest(verifier.as_bytes()));
+            if got != challenge {
+                return (
+                    400,
+                    serde_json::json!({"error":"invalid_grant","error_description":"pkce"})
+                        .to_string(),
+                );
+            }
+            let now = aauth_core::now_unix();
+            let mut payload = self.claims.lock().unwrap().clone();
+            payload["iss"] = self.issuer.clone().into();
+            let (as_array, with_azp) = *self.aud_array.lock().unwrap();
+            if as_array {
+                payload["aud"] = serde_json::json!([self.client_id, "another-client"]);
+                if with_azp {
+                    payload["azp"] = self.client_id.clone().into();
+                }
+            } else {
+                payload["aud"] = self.client_id.clone().into();
+            }
+            payload["iat"] = now.into();
+            payload["exp"] = (now + 300).into();
+            payload["nonce"] = self
+                .nonce_override
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or(nonce)
+                .into();
+            let use_kid = self
+                .kid_override
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or(self.kid.clone());
+            let id_token = if *self.alg_none.lock().unwrap() {
+                let h = aauth_core::b64::encode(br#"{"alg":"none","typ":"JWT"}"#);
+                let p = aauth_core::b64::encode(payload.to_string().as_bytes());
+                format!("{h}.{p}.")
+            } else {
+                // Okta's header carries no typ; a JWT header need not.
+                self.signer.sign(
+                    &serde_json::json!({"alg": self.signer.alg(), "kid": use_kid}),
+                    &payload,
+                )
+            };
+            (200, serde_json::json!({ "access_token": "at", "token_type": "Bearer", "id_token": id_token }).to_string())
+        }
     }
 
     async fn spawn_mock_idp() -> MockIdp {
+        spawn_idp(Flavour::Es256).await
+    }
+
+    async fn spawn_idp(flavour: Flavour) -> MockIdp {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let issuer = format!("http://127.0.0.1:{port}");
-        let key = p256::ecdsa::SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
-        let kid = "idp-key-1".to_string();
-        let client_id = "psd-client".to_string();
-        let secret = "s3cret".to_string();
-        let codes: Arc<StdMutex<HashMap<String, (String, String)>>> = Default::default();
-        let claims = Arc::new(StdMutex::new(serde_json::json!({
-            "sub": "user-1", "email": "alice@acme.example", "name": "Alice Example",
-            "groups": ["everyone", "psd-users"], "org": "acme"
-        })));
-        let nonce_override: Arc<StdMutex<Option<String>>> = Default::default();
-        let kid_override: Arc<StdMutex<Option<String>>> = Default::default();
-        let alg_none = Arc::new(StdMutex::new(false));
-        let jwks_s = serde_json::json!({ "keys": [jwk_for(&key, &kid)] }).to_string();
-        let disc_s = serde_json::json!({
-            "issuer": issuer,
-            "authorization_endpoint": format!("{issuer}/authorize"),
-            "token_endpoint": format!("{issuer}/token"),
-            "jwks_uri": format!("{issuer}/jwks"),
-            "id_token_signing_alg_values_supported": ["ES256"],
-        })
-        .to_string();
-        let st = (
-            issuer.clone(),
-            client_id.clone(),
-            secret.clone(),
-            key.clone(),
-            kid.clone(),
-            codes.clone(),
-            claims.clone(),
-            nonce_override.clone(),
-            kid_override.clone(),
-            alg_none.clone(),
-        );
-        let handle = tokio::spawn(async move {
-            loop {
-                let (stream, _) = match listener.accept().await {
-                    Ok(p) => p,
-                    Err(_) => break,
-                };
-                let st = st.clone();
-                let jwks_s = jwks_s.clone();
-                let disc_s = disc_s.clone();
-                tokio::spawn(async move {
-                    let svc = service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
-                        let st = st.clone();
-                        let jwks_s = jwks_s.clone();
-                        let disc_s = disc_s.clone();
-                        async move {
-                            let (
-                                issuer,
-                                client_id,
-                                secret,
-                                key,
-                                kid,
-                                codes,
-                                claims,
-                                nonce_override,
-                                kid_override,
-                                alg_none,
-                            ) = st;
-                            let path = req.uri().path().to_string();
-                            let method = req.method().clone();
-                            let auth = req
-                                .headers()
-                                .get("authorization")
-                                .and_then(|v| v.to_str().ok())
-                                .map(String::from);
-                            let body = req.into_body().collect().await.unwrap().to_bytes();
-                            let (status, out) = match (method, path.as_str()) {
-                                (Method::GET, "/.well-known/openid-configuration") => (200, disc_s),
-                                (Method::GET, "/jwks") => (200, jwks_s),
-                                (Method::POST, "/token") => {
-                                    let form = crate::ui::parse_form(&body);
-                                    let expected = format!(
-                                        "Basic {}",
-                                        aauth_core::b64::encode_std(
-                                            format!("{client_id}:{secret}").as_bytes()
-                                        )
-                                    );
-                                    if auth.as_deref() != Some(expected.as_str()) {
-                                        (
-                                            401,
-                                            serde_json::json!({"error":"invalid_client"})
-                                                .to_string(),
-                                        )
-                                    } else if form.get("grant_type").map(String::as_str)
-                                        != Some("authorization_code")
-                                    {
-                                        (
-                                            400,
-                                            serde_json::json!({"error":"unsupported_grant_type"})
-                                                .to_string(),
-                                        )
-                                    } else {
-                                        let code = form.get("code").cloned().unwrap_or_default();
-                                        let taken = codes.lock().unwrap().remove(&code);
-                                        match taken {
-                                            None => (
-                                                400,
-                                                serde_json::json!({"error":"invalid_grant"})
-                                                    .to_string(),
-                                            ),
-                                            Some((nonce, challenge)) => {
-                                                let verifier = form
-                                                    .get("code_verifier")
-                                                    .cloned()
-                                                    .unwrap_or_default();
-                                                let got = aauth_core::b64::encode(
-                                                    &sha2::Sha256::digest(verifier.as_bytes()),
-                                                );
-                                                if got != challenge {
-                                                    (400, serde_json::json!({"error":"invalid_grant","error_description":"pkce"}).to_string())
-                                                } else {
-                                                    let now = aauth_core::now_unix();
-                                                    let mut payload =
-                                                        claims.lock().unwrap().clone();
-                                                    payload["iss"] = issuer.clone().into();
-                                                    payload["aud"] = client_id.clone().into();
-                                                    payload["iat"] = now.into();
-                                                    payload["exp"] = (now + 300).into();
-                                                    payload["nonce"] = nonce_override
-                                                        .lock()
-                                                        .unwrap()
-                                                        .clone()
-                                                        .unwrap_or(nonce)
-                                                        .into();
-                                                    let use_kid = kid_override
-                                                        .lock()
-                                                        .unwrap()
-                                                        .clone()
-                                                        .unwrap_or(kid);
-                                                    let id_token = if *alg_none.lock().unwrap() {
-                                                        let h = aauth_core::b64::encode(
-                                                            br#"{"alg":"none","typ":"JWT"}"#,
-                                                        );
-                                                        let p = aauth_core::b64::encode(
-                                                            payload.to_string().as_bytes(),
-                                                        );
-                                                        format!("{h}.{p}.")
-                                                    } else {
-                                                        sign_es256(
-                                                            &key,
-                                                            &serde_json::json!({"alg":"ES256","typ":"JWT","kid":use_kid}),
-                                                            &payload,
-                                                        )
-                                                    };
-                                                    (200, serde_json::json!({
-                                                        "access_token": "at", "token_type": "Bearer", "id_token": id_token
-                                                    }).to_string())
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                _ => (404, "{}".to_string()),
-                            };
-                            Ok::<_, std::convert::Infallible>(
-                                hyper::Response::builder()
-                                    .status(status)
-                                    .header("content-type", "application/json")
-                                    .body(http_body_util::Full::new(hyper::body::Bytes::from(out)))
-                                    .unwrap(),
-                            )
-                        }
-                    });
-                    let _ = http1::Builder::new()
-                        .serve_connection(TokioIo::new(stream), svc)
-                        .await;
-                });
-            }
+        // Okta's *custom* authorization server (the shape most orgs run
+        // for OIDC apps) has a path in its issuer; discovery is the issuer
+        // plus the well-known suffix, and every endpoint lives under it.
+        let issuer = match flavour {
+            Flavour::Es256 => format!("http://127.0.0.1:{port}"),
+            Flavour::Okta => format!("http://127.0.0.1:{port}/oauth2/default"),
+        };
+        let signer = Arc::new(match flavour {
+            Flavour::Es256 => Signer::Es256(p256::ecdsa::SigningKey::random(
+                &mut p256::elliptic_curve::rand_core::OsRng,
+            )),
+            Flavour::Okta => Signer::Rs256(Arc::new(
+                ring::signature::RsaKeyPair::from_der(
+                    &aauth_core::b64::decode_std(TEST_RSA_PKCS8_B64).unwrap(),
+                )
+                .unwrap(),
+            )),
         });
-        MockIdp {
-            issuer,
-            client_id,
-            secret,
-            codes,
-            claims,
-            nonce_override,
-            kid_override,
-            alg_none,
-            _handle: handle,
+        let (kid, client_id) = match flavour {
+            Flavour::Es256 => ("idp-key-1", "psd-client"),
+            Flavour::Okta => (
+                "eq5U0N7l0Bp5s5DBmzn3XLzKX_wDlaGDNfCPMs2Rl4o",
+                "0oa1b2c3d4e5f6g7h8i9",
+            ),
+        };
+        let claims = match flavour {
+            Flavour::Es256 => serde_json::json!({
+                "sub": "user-1", "email": "alice@acme.example", "name": "Alice Example",
+                "groups": ["everyone", "psd-users"], "org": "acme"
+            }),
+            // What an Okta org authorization server puts in an ID token,
+            // with a Groups claim filter configured on the application.
+            Flavour::Okta => serde_json::json!({
+                "sub": "00u1a2b3c4d5e6f7g8h9", "name": "Alice Example",
+                "email": "alice@acme.example", "ver": 1,
+                "jti": "ID.k1QO0Ai_x-6yQ7X6t3Yb9Q6z2y5", "amr": ["pwd", "mfa"],
+                "idp": "00o9z8y7x6w5v4u3t2s1", "preferred_username": "alice@acme.example",
+                "auth_time": aauth_core::now_unix(), "at_hash": "F0zY9WsRJHYCbtSMngjBiw",
+                "groups": ["Everyone", "psd-users"], "org": "acme"
+            }),
+        };
+        let disc_s = match flavour {
+            Flavour::Es256 => serde_json::json!({
+                "issuer": issuer,
+                "authorization_endpoint": format!("{issuer}/authorize"),
+                "token_endpoint": format!("{issuer}/token"),
+                "jwks_uri": format!("{issuer}/jwks"),
+                "id_token_signing_alg_values_supported": ["ES256"],
+            }),
+            // Okta's org-AS discovery document, field for field (paths kept;
+            // only the host is ours).
+            Flavour::Okta => serde_json::json!({
+                "issuer": issuer,
+                "authorization_endpoint": format!("{issuer}/v1/authorize"),
+                "token_endpoint": format!("{issuer}/v1/token"),
+                "userinfo_endpoint": format!("{issuer}/v1/userinfo"),
+                "registration_endpoint": format!("{issuer}/v1/clients"),
+                "jwks_uri": format!("{issuer}/v1/keys"),
+                "response_types_supported": ["code", "id_token", "code id_token", "code token", "id_token token", "code id_token token"],
+                "response_modes_supported": ["query", "fragment", "form_post", "okta_post_message"],
+                "grant_types_supported": ["authorization_code", "implicit", "refresh_token", "password", "urn:ietf:params:oauth:grant-type:device_code"],
+                "subject_types_supported": ["public"],
+                "id_token_signing_alg_values_supported": ["RS256"],
+                "scopes_supported": ["openid", "email", "profile", "address", "phone", "offline_access", "groups"],
+                "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post", "client_secret_jwt", "private_key_jwt", "none"],
+                "claims_supported": ["iss", "ver", "sub", "aud", "iat", "exp", "jti", "auth_time", "amr", "idp", "nonce", "name", "nickname", "preferred_username", "given_name", "middle_name", "family_name", "email", "email_verified", "profile", "zoneinfo", "locale", "address", "phone_number", "picture", "website", "gender", "birthdate", "updated_at", "at_hash", "c_hash"],
+                "code_challenge_methods_supported": ["S256"],
+                "introspection_endpoint": format!("{issuer}/v1/introspect"),
+                "revocation_endpoint": format!("{issuer}/v1/revoke"),
+                "end_session_endpoint": format!("{issuer}/v1/logout"),
+                "request_parameter_supported": true,
+                "request_object_signing_alg_values_supported": ["HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256", "ES384", "ES512"],
+                "device_authorization_endpoint": format!("{issuer}/v1/device/authorize"),
+                "pushed_authorization_request_endpoint": format!("{issuer}/v1/par"),
+                "backchannel_token_delivery_modes_supported": ["poll"],
+                "backchannel_authentication_request_signing_alg_values_supported": ["HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256", "ES384", "ES512"],
+                "dpop_signing_alg_values_supported": ["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"],
+            }),
         }
+        .to_string();
+        let paths = match flavour {
+            Flavour::Es256 => ("/.well-known/openid-configuration", "/token", "/jwks"),
+            Flavour::Okta => (
+                "/oauth2/default/.well-known/openid-configuration",
+                "/oauth2/default/v1/token",
+                "/oauth2/default/v1/keys",
+            ),
+        };
+        let st = IdpState {
+            issuer: issuer.clone(),
+            client_id: client_id.to_string(),
+            secret: "s3cret".to_string(),
+            jwks_s: serde_json::json!({ "keys": [signer.jwk(kid)] }).to_string(),
+            signer,
+            kid: kid.to_string(),
+            codes: Default::default(),
+            claims: Arc::new(StdMutex::new(claims)),
+            nonce_override: Default::default(),
+            kid_override: Default::default(),
+            alg_none: Arc::new(StdMutex::new(false)),
+            aud_array: Arc::new(StdMutex::new((false, true))),
+            paths,
+            disc_s,
+        };
+        let out = MockIdp {
+            issuer,
+            client_id: st.client_id.clone(),
+            secret: st.secret.clone(),
+            codes: st.codes.clone(),
+            claims: st.claims.clone(),
+            aud_array: st.aud_array.clone(),
+            nonce_override: st.nonce_override.clone(),
+            kid_override: st.kid_override.clone(),
+            alg_none: st.alg_none.clone(),
+            _handle: tokio::spawn(async move {
+                loop {
+                    let (stream, _) = match listener.accept().await {
+                        Ok(p) => p,
+                        Err(_) => break,
+                    };
+                    let st = st.clone();
+                    tokio::spawn(async move {
+                        let svc = service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                            let st = st.clone();
+                            async move {
+                                let path = req.uri().path().to_string();
+                                let method = req.method().clone();
+                                let auth = req
+                                    .headers()
+                                    .get("authorization")
+                                    .and_then(|v| v.to_str().ok())
+                                    .map(String::from);
+                                let body = req.into_body().collect().await.unwrap().to_bytes();
+                                let (status, out) =
+                                    st.handle(method, &path, auth.as_deref(), &body);
+                                Ok::<_, std::convert::Infallible>(
+                                    hyper::Response::builder()
+                                        .status(status)
+                                        .header("content-type", "application/json")
+                                        .body(http_body_util::Full::new(hyper::body::Bytes::from(
+                                            out,
+                                        )))
+                                        .unwrap(),
+                                )
+                            }
+                        });
+                        let _ = http1::Builder::new()
+                            .serve_connection(TokioIo::new(stream), svc)
+                            .await;
+                    });
+                }
+            }),
+        };
+        out
     }
 
     impl MockIdp {
@@ -5361,7 +5500,11 @@ mod oidc_tests {
         /// (code, state) for the redirect to the callback.
         fn authorize(&self, location: &str) -> (String, String) {
             let (base, query) = location.split_once('?').unwrap();
-            assert_eq!(base, format!("{}/authorize", self.issuer));
+            assert!(
+                base == format!("{}/authorize", self.issuer)
+                    || base == format!("{}/v1/authorize", self.issuer),
+                "{base}"
+            );
             let q: HashMap<String, String> = query
                 .split('&')
                 .map(|kv| {
@@ -5918,6 +6061,94 @@ mod oidc_tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    /// Okta-shaped fixture: the org authorization server's discovery
+    /// document, an RS256 JWKS, and ID tokens with Okta's claims — signed
+    /// with our own RSA key. It does not prove psd works against Okta; it
+    /// pins the document shapes, which is where generic OIDC code breaks.
+    #[tokio::test]
+    async fn okta_shaped_provider_signs_in_and_explains_the_gate() {
+        let idp = spawn_idp(Flavour::Okta).await;
+        let app = oidc_app(&idp, serde_json::json!({ "required_claims": { "groups": "psd-users" }, "tenant_claim": "org" })).await;
+        let rt = app.oidc.as_ref().unwrap();
+        // The issuer carries a path (a custom authorization server); the
+        // endpoints were taken from discovery under it.
+        assert!(idp.issuer.ends_with("/oauth2/default"));
+        assert_eq!(rt.token_endpoint, format!("{}/v1/token", idp.issuer));
+        assert_eq!(rt.jwks_uri, format!("{}/v1/keys", idp.issuer));
+
+        // Happy path over RS256 with a string aud.
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        assert!(loc.starts_with(&format!("{}/v1/authorize?", idp.issuer)));
+        let (code, state) = idp.authorize(&loc);
+        let (status, page, headers) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::SEE_OTHER, "{page}");
+        let sid = cookie_named(&headers, crate::ui::SESSION_COOKIE).unwrap();
+        let person = app.store.get_session(&sid).unwrap().unwrap().person_id;
+        assert_eq!(
+            app.store
+                .identity(&idp.issuer, "00u1a2b3c4d5e6f7g8h9")
+                .unwrap()
+                .unwrap()
+                .person_id,
+            person
+        );
+        assert_eq!(
+            app.store.get_person(&person).unwrap().unwrap().display_name,
+            "Alice Example"
+        );
+
+        // Array aud with azp naming us: accepted. Without azp: refused.
+        *idp.aud_array.lock().unwrap() = (true, true);
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, page, _) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::SEE_OTHER, "{page}");
+        *idp.aud_array.lock().unwrap() = (true, false);
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, _, _) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        *idp.aud_array.lock().unwrap() = (false, true);
+
+        // The most predictable Okta failure: the groups claim is not in the
+        // token until the application's Groups claim filter is configured.
+        // The page and the audit say *that*, not "you are not in the group".
+        idp.claims
+            .lock()
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("groups");
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, page, _) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{page}");
+        assert!(
+            page.contains(
+                "ID token has no &#x27;groups&#x27; claim; the identity provider is not sending it"
+            ),
+            "{page}"
+        );
+        // Present but not permitted: the other message.
+        idp.claims.lock().unwrap()["groups"] = serde_json::json!(["Everyone"]);
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, page, _) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{page}");
+        assert!(
+            page.contains("&#x27;groups&#x27; does not include a permitted value"),
+            "{page}"
+        );
+        // A namespaced claim path resolves as a literal key (Auth0 style).
+        idp.claims.lock().unwrap()["https://acme.example/groups"] =
+            serde_json::json!(["psd-users"]);
+        let app2 = oidc_app(&idp, serde_json::json!({ "required_claims": { "https://acme.example/groups": "psd-users" } })).await;
+        let (loc, cookie) = start(&app2, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, page, _) = callback(&app2, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::SEE_OTHER, "{page}");
     }
 
     #[tokio::test]

@@ -45,6 +45,7 @@ production value.
 | Page | What it covers |
 |---|---|
 | [Configuration](configuration.md) | Every field of `psd.json`, its default, and the protocol rule behind it; environment overrides |
+| [Identity providers](identity-providers.md) | Single sign-on against Okta, Entra ID, Google Workspace, Keycloak, Auth0 — settings, predictable failures, first-tenant checklist |
 | [Command line](cli.md) | `serve`, `keygen`, `person`, `invite`, `agents`, `pending`, `example-config` |
 | [HTTP API](api.md) | Discovery documents, `/person`, `/pending/{id}`, `/token`, `/revoke`, `/mission`, the error vocabulary |
 | [Templates & branding](templates.md) | Overriding the built-in HTML by file name; the variables each template receives |

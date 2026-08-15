@@ -796,12 +796,17 @@ pub async fn oidc_callback(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiErro
                 "oidc_login_denied",
                 serde_json::json!({ "reason": "claims", "detail": d, "idp_iss": rt.cfg.issuer }),
             );
+            // The reason is on the page too: an operator testing as a user
+            // then sees "the provider is not sending groups" instead of a
+            // generic refusal, and a person can quote it to the operator.
             return Ok(oidc_fail(
                 app,
                 StatusCode::FORBIDDEN,
                 "Your account is not permitted to use this Person Server",
-                "You signed in at the identity provider, but your account does not meet this \
-                 server's requirements. Ask whoever runs it if you think it should.",
+                &format!(
+                    "You signed in at the identity provider, but your account does not meet this \
+                     server's requirements ({d}). Ask whoever runs it if you think it should."
+                ),
             ));
         }
     };
@@ -918,7 +923,10 @@ pub async fn oidc_callback(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiErro
         "person",
         "signed_in",
         None,
-        serde_json::json!({ "method": "oidc", "idp_iss": verified.iss, "idp_sub": verified.sub }),
+        serde_json::json!({
+            "method": "oidc", "idp_iss": verified.iss, "idp_sub": verified.sub,
+            "email": verified.email, "cnf": verified.cnf_present,
+        }),
     );
     let resp = ui::with_cookie(
         ui::redirect(&ui::safe_next(Some(&row.next))),

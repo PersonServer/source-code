@@ -335,7 +335,10 @@ provider stops their logins. It does not stop the agents already acting for
 them; run `psd person deactivate ID` to revoke every binding, end their
 missions, drop their sessions and refuse further sign-ins (see the
 [CLI](cli.md#person-deactivate-person-activate)). Put it in the runbook.
-There is no SCIM in this release.
+There is no SCIM in this release. Provider-specific settings and the
+failures each one makes likely — Okta's groups claim, Entra's group
+overflow, Google's cross-origin keys — are in
+[Identity providers](identity-providers.md).
 
 ### Optional surfaces
 

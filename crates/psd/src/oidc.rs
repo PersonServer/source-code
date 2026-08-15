@@ -96,6 +96,12 @@ pub struct Verified {
     pub email: Option<String>,
     pub tenant: Option<String>,
     pub display_name: String,
+    /// The token carried a `cnf` (key-binding) member. Not a reason to
+    /// refuse: the ID token is fetched by psd itself over the back channel
+    /// with client authentication and PKCE, never presented as a bearer, so
+    /// there is no sender constraint to downgrade. Recorded in the audit
+    /// line so an operator who turned on DPoP can see the claim arrived.
+    pub cnf_present: bool,
 }
 
 impl OidcRuntime {
@@ -333,14 +339,20 @@ impl OidcRuntime {
             None => return Err(bad("id_token has no nonce".into())),
         }
         let sub = s("sub").ok_or_else(|| bad("id_token has no sub".into()))?;
-        // The gate.
+        // The gate. "Absent" and "present but not matching" are told apart
+        // because they send the operator to different places: an absent
+        // `groups` means the provider is not emitting the claim (Okta and
+        // Entra both need it switched on per application), a mismatch means
+        // the person is not in a permitted group.
         for (path, matcher) in &self.cfg.required_claims {
             let actual = lookup_claim(p, path).ok_or_else(|| {
-                LoginError::NotPermitted(format!("required claim {path:?} is absent"))
+                LoginError::NotPermitted(format!(
+                    "ID token has no '{path}' claim; the identity provider is not sending it"
+                ))
             })?;
             if !claim_matches(matcher, actual) {
                 return Err(LoginError::NotPermitted(format!(
-                    "required claim {path:?} does not satisfy the policy"
+                    "'{path}' does not include a permitted value"
                 )));
             }
         }
@@ -364,6 +376,7 @@ impl OidcRuntime {
             email,
             tenant,
             display_name,
+            cnf_present: p.get("cnf").is_some(),
         })
     }
 
