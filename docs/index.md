@@ -16,6 +16,13 @@ tokens**, keeps the record, and revokes.
 New to the idea? Start with [What a Person Server is](protocol.md) — ten
 minutes, no code.
 
+## Try it first
+
+A public **[hosted sandbox](sandbox.md)** runs at `https://sandbox.personserver.dev` —
+a live Person Server to build agents, providers and resources against, without
+running psd yourself. Test people are issued on request; tokens have no
+production value.
+
 ## Pick your door
 
 <div class="doors" markdown="0">
@@ -48,7 +55,8 @@ minutes, no code.
 - **[agentprovider.dev](https://agentprovider.dev)** — `apd`, the AAuth
   Agent Provider that issues the agent identities psd verifies. It runs a
   public sandbox with open enrollment, which is the easiest way to get a real
-  agent token to test psd with. psd builds on the same protocol library,
+  agent token to test psd with; psd runs the matching
+  [Person Server sandbox](sandbox.md). psd builds on the same protocol library,
   [`aauth-core`](https://github.com/AgentProvider/source-code/tree/main/crates/aauth-core).
 - **[agentd.dev](https://agentd.dev)** — a minimal, MCP-native agent
   runtime that enrols with an Agent Provider, holds its own key and signs
