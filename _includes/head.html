@@ -1,0 +1,15 @@
+{%- comment -%} Adapted from apd (MIT OR Apache-2.0), github.com/AgentProvider/source-code. {%- endcomment -%}
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b0b0f" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0b0f'/%3E%3Ccircle cx='16' cy='12' r='4.6' fill='none' stroke='%2360a5fa' stroke-width='2.4'/%3E%3Cpath d='M7.5 26c1.4-5 4.8-7.2 8.5-7.2s7.1 2.2 8.5 7.2' fill='none' stroke='%2360a5fa' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+{% seo %}
+{%- comment -%}
+  Theme is applied before first paint by a tiny external script (kept out of
+  the HTML so the site can run under a strict CSP with no inline script).
+  Loaded synchronously on purpose: it is a few hundred bytes and prevents a
+  flash of the wrong theme.
+{%- endcomment -%}
+<script src="{{ '/assets/js/theme.js' | relative_url }}"></script>
+<link rel="stylesheet" href="{{ '/assets/css/site.css' | relative_url }}">

@@ -1,0 +1,30 @@
+{%- comment -%} Adapted from apd (MIT OR Apache-2.0), github.com/AgentProvider/source-code. {%- endcomment -%}
+{%- assign u = page.url -%}
+<aside class="sidebar" aria-label="Documentation">
+  <div class="group">
+    <p class="g-title">Start here</p>
+    <a href="{{ '/docs/' | relative_url }}" {% if u == '/docs/' %}class="active"{% endif %}>Overview</a>
+    <a href="{{ '/docs/protocol.html' | relative_url }}" {% if u contains 'protocol' %}class="active"{% endif %}>What a Person Server is</a>
+  </div>
+  <div class="group">
+    <p class="g-title">For people</p>
+    <a href="{{ '/docs/for-people.html' | relative_url }}" {% if u contains 'for-people' %}class="active"{% endif %}>Using your Person Server</a>
+  </div>
+  <div class="group">
+    <p class="g-title">For operators</p>
+    <a href="{{ '/docs/install.html' | relative_url }}" {% if u contains 'install' %}class="active"{% endif %}>Install &amp; deploy</a>
+    <a href="{{ '/docs/configuration.html' | relative_url }}" {% if u contains 'configuration' %}class="active"{% endif %}>Configuration</a>
+    <a href="{{ '/docs/cli.html' | relative_url }}" {% if u contains 'cli' %}class="active"{% endif %}>Command line</a>
+    <a href="{{ '/docs/security.html' | relative_url }}" {% if u contains 'security' %}class="active"{% endif %}>Security model</a>
+  </div>
+  <div class="group">
+    <p class="g-title">Reference</p>
+    <a href="{{ '/docs/api.html' | relative_url }}" {% if u contains 'api' %}class="active"{% endif %}>HTTP API</a>
+    <a href="{{ '/docs/templates.html' | relative_url }}" {% if u contains 'templates' %}class="active"{% endif %}>Templates &amp; branding</a>
+  </div>
+  <div class="group">
+    <p class="g-title">Elsewhere</p>
+    <a href="https://agentprovider.dev">agentprovider.dev ↗</a>
+    <a href="https://github.com/dickhardt/AAuth">AAuth draft ↗</a>
+  </div>
+</aside>

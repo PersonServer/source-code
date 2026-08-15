@@ -1,0 +1,55 @@
+# GitHub Pages (Jekyll) configuration for personserver.dev.
+# Custom design — no external theme, no CDN, no JS framework. Markdown under
+# docs/ renders through the `doc` layout; index.html is the landing page.
+# Adapted from apd (MIT OR Apache-2.0), github.com/AgentProvider/source-code.
+
+title: psd — AAuth Person Server
+description: >-
+  psd is a self-hostable AAuth Person Server: the part of the protocol that
+  speaks for the human. It decides which AI agents may act for you, at which
+  resources, on what terms — with passkeys, signed tokens and a full record.
+lang: en
+url: https://personserver.dev
+baseurl: ""
+# Where the source lives. Used by the nav and footer.
+repo_url: https://github.com/PersonServer/source-code
+
+plugins:
+  - jekyll-relative-links
+  - jekyll-seo-tag
+  - jekyll-sitemap
+
+relative_links:
+  enabled: true
+  collections: false
+
+# Apply the docs chrome (nav + sidebar) to every rendered doc page.
+defaults:
+  - scope:
+      path: "docs"
+    values:
+      layout: doc
+
+# Keep the published site to the landing page and the prose docs. Everything
+# below is source, build output, or internal planning material.
+exclude:
+  # Internal: decision log, milestone status and the build plan this
+  # implementation followed. Useful to contributors, not to the site's readers.
+  - docs/DECISIONS.md
+  - docs/STATUS.md
+  - docs/rfc-psd-implementation.md
+  - README.md
+  - LICENSE
+  - NOTICE.md
+  - Dockerfile
+  - .dockerignore
+  - charts/
+  - Cargo.toml
+  - Cargo.lock
+  - crates/
+  - target/
+  - .github/
+  - .gitignore
+  - Gemfile
+  - Gemfile.lock
+  - vendor/

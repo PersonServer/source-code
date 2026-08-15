@@ -59,6 +59,11 @@ absence from the metadata is the signal).
 
 ## Quick start
 
+Prebuilt: `docker pull ghcr.io/personserver/psd:latest` (multi-arch,
+distroless, non-root; `:edge` follows `main`) or
+`helm install psd oci://ghcr.io/personserver/charts/psd --set issuer=… --set keys.existingSecret=psd-keys`
+(see [charts/psd](charts/psd/README.md)). From source:
+
 ```sh
 cargo build --release
 ./target/release/psd keygen --keys psd-keys.json      # signing key + pairwise secret, mode 0600

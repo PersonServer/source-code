@@ -1,0 +1,309 @@
+---
+layout: home
+title: psd — AAuth Person Server
+description: A Person Server is the part of AAuth that speaks for the human — it decides which AI agents may act for you, at which resources, on what terms, and keeps the record. psd is one Rust binary you run yourself, with passkeys and SQLite.
+---
+{%- comment -%} Adapted from apd (MIT OR Apache-2.0), github.com/AgentProvider/source-code. {%- endcomment -%}
+
+<!-- ============================================================ hero -->
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <span class="badge reveal d1"><span class="dot"></span> AAuth Person Server · self-hosted</span>
+        <h1 class="reveal d2">Decide which agents may act as&nbsp;<span class="em">you</span>.</h1>
+        <p class="lede reveal d3">A Person Server is the part of AAuth that speaks for the human. It says which AI agents may act for you, at which services, on what terms — and it keeps the record. <strong>psd</strong> is one you run yourself: a single Rust binary, passkeys, SQLite.</p>
+        <div class="hero-actions reveal d4">
+          <a class="btn btn-primary" href="#role">
+            What a Person Server is
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+          </a>
+          <a class="btn btn-ghost" href="{{ '/docs/install.html' | relative_url }}">Run your own</a>
+        </div>
+        <div class="hero-meta reveal d5">
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg> Passkeys, no passwords</span>
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg> Ed25519-signed, key-bound tokens</span>
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg> One binary, one SQLite file</span>
+        </div>
+        <p class="hero-aside reveal d5">Pairs with an Agent Provider such as <a href="https://agentprovider.dev">agentprovider.dev</a> — the two halves of “this agent, acting for this person”.</p>
+      </div>
+
+      <!-- signature element: the consent screen, the moment the person decides -->
+      <div class="consent reveal d3" role="img" aria-label="A Person Server consent screen asking whether an agent may act for you at a service, with Approve and Deny">
+        <div class="consent-head">
+          <span class="dots"><i></i><i></i><i></i></span>
+          <span class="ttl">ps.example · /consent</span>
+        </div>
+        <div class="consent-body">
+          <div class="label">An agent is asking</div>
+          <p class="q">May <span class="who">Travel planner</span> act as you at <span class="where">calendar.example</span>?</p>
+          <dl class="facts">
+            <dt>agent</dt><dd>aauth:k7q3p9n2@sandbox.agentprovider.dev</dd>
+            <dt>provider</dt><dd>Agent Provider sandbox — verified</dd>
+            <dt>device</dt><dd><span class="unv">“MacBook Pro” — agent-attested, unverified</span></dd>
+            <dt>service</dt><dd>Calendar · <em>read and create events</em></dd>
+            <dt>token</dt><dd>aa-person+jwt · ≤ 1 h · revocable</dd>
+          </dl>
+          <div class="actions">
+            <span class="b approve"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg> Approve</span>
+            <span class="b">Deny</span>
+            <span class="via">code 7XK4·M2QP</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ the role -->
+<section class="section" id="role">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">What a Person Server is</span>
+      <h2>Three parties. One question: <em>may this agent act as you here?</em></h2>
+      <p>AAuth separates who vouches for the <em>software</em> from who vouches for the <em>human</em>. Resources verify both — against published keys, never a callback.</p>
+    </div>
+    <div class="roles">
+      <div class="role">
+        <span class="k">agent provider</span>
+        <h3>Vouches for the software</h3>
+        <p class="says">“This is agent X, and here is its key.”</p>
+        <p>Issues short-lived <code>aa-agent+jwt</code> identities bound to a key the agent holds. Run one, or use <a href="https://agentprovider.dev">agentprovider.dev</a>.</p>
+      </div>
+      <div class="role here">
+        <span class="k">person server <span class="pill">you are here</span></span>
+        <h3>Vouches for the human</h3>
+        <p class="says">“Agent X acts for this person at this service, and here is what they allow.”</p>
+        <p>Holds the agent ↔ person binding, runs consent, issues <code>aa-person+jwt</code> and <code>aa-auth+jwt</code>, keeps the record, and revokes.</p>
+      </div>
+      <div class="role">
+        <span class="k">resource</span>
+        <h3>Verifies and serves</h3>
+        <p class="says">“Signed by a key I can check; the person said yes.”</p>
+        <p>An API, an MCP server, a calendar. It checks the agent's signature and the Person Server's token against their published JWKS.</p>
+      </div>
+    </div>
+    <div class="never">
+      <div><b>psd never issues agent identities.</b> That is the Agent Provider's job; psd only verifies them.</div>
+      <div><b>psd never sees your data.</b> It says <em>who may act</em>; the resource still decides <em>what</em> and holds the content.</div>
+      <div><b>psd never hands out a name resources can share.</b> Each service gets its own pairwise <code>sub</code>; two of them cannot correlate you.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ two audiences -->
+<section class="section" id="who">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Two audiences</span>
+      <h2>The person who decides. The operator who runs it.</h2>
+      <p>psd is one binary, but the person logging in with a passkey and the operator terminating TLS want different pages.</p>
+    </div>
+    <div class="doors">
+      <a class="door" href="{{ '/docs/for-people.html' | relative_url }}">
+        <span class="k">for people</span>
+        <h3>Using your Person Server</h3>
+        <p>What you are being asked, what approving means, and how to take it back.</p>
+        <ul>
+          <li>Enrol with a passkey from a one-time link</li>
+          <li>Read a consent screen: agent, provider, service, terms</li>
+          <li>See every agent connected to you; revoke one in a click</li>
+          <li>Missions: approve a task once, end it any time</li>
+        </ul>
+        <span class="go">Read the guide <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+      <a class="door" href="{{ '/docs/install.html' | relative_url }}">
+        <span class="k">for operators</span>
+        <h3>Install &amp; deploy</h3>
+        <p>Build it, pick a permanent issuer, put TLS in front, add the first person.</p>
+        <ul>
+          <li><code>keygen</code> · <code>example-config</code> · <code>serve</code> · <code>person add</code></li>
+          <li>Configuration reference, every field explained</li>
+          <li>Reverse proxy rules: preserve <code>Host</code>, no path rewrites</li>
+          <li>Headless approvals, audit log, key rotation, backups</li>
+        </ul>
+        <span class="go">Read the guide <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ how it works -->
+<section class="section" id="how">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">The flow</span>
+      <h2>An agent asks. You decide. The service checks.</h2>
+      <p>Everything on the wire is signed. Nothing long-lived is issued. Every step is recorded where you can read it.</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <span class="flowline"></span>
+        <div class="n">step 1</div>
+        <h3>The agent asks</h3>
+        <p>It signs <code>POST /person</code> with the key its Agent Provider vouched for and names the service. Unknown or unconsented → <code>202</code>, and the person is asked.</p>
+      </div>
+      <div class="step">
+        <span class="flowline"></span>
+        <div class="n">step 2</div>
+        <h3>The person decides</h3>
+        <p>A consent screen shows the agent, its provider, the service and its terms. Passkey, approve or deny — once, or per scope, or for a mission with a lifetime.</p>
+      </div>
+      <div class="step">
+        <div class="n">step 3</div>
+        <h3>The service verifies</h3>
+        <p>The agent receives a person token (≤ 1 h) bound to its own key and presents it, signed, to the service — which checks it against psd's published JWKS. <span class="accent">Revoke any time.</span></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ quickstart -->
+<section class="section" id="install">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Quickstart</span>
+      <h2>Run it in a few minutes.</h2>
+      <p>One binary, one keys file, one SQLite database. The issuer is permanent — pick the hostname before first run.</p>
+    </div>
+
+    <div class="code">
+      <div class="code-head"><span class="tag">bash</span><button class="copy" data-copy="cmd-quick" type="button"></button></div>
+<pre id="cmd-quick"><span class="c"># build (Rust 1.85+; no C toolchain beyond what SQLite needs)</span>
+<span class="p">$</span> git clone {{ site.repo_url }} psd &amp;&amp; cd psd
+<span class="p">$</span> cargo build --release
+
+<span class="c"># signing keys + the pairwise secret, once — back this file up</span>
+<span class="p">$</span> ./target/release/psd keygen --keys psd-keys.json
+
+<span class="c"># a config to edit: issuer, keys_file, storage.path</span>
+<span class="p">$</span> ./target/release/psd example-config > psd.json
+
+<span class="c"># serve, then add the first person — prints a one-time enrolment link</span>
+<span class="p">$</span> ./target/release/psd serve --config psd.json
+<span class="p">$</span> ./target/release/psd person add --name "Alice" --config psd.json</pre>
+    </div>
+
+    <div class="hero-actions" style="margin-top:22px">
+      <a class="btn btn-primary" href="{{ '/docs/install.html' | relative_url }}">
+        Full install guide
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+      </a>
+      <a class="btn btn-ghost" href="{{ '/docs/configuration.html' | relative_url }}">Configuration reference</a>
+    </div>
+
+    <div style="margin-top:26px">
+      <p class="demo-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9l-8 13.9A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3.2l-8-13.9a2 2 0 0 0-3.4 0z"/></svg>
+        <span><b>Tracks a draft.</b> AAuth is an IETF Internet-Draft, not yet a released standard. psd follows <code>draft-hardt-oauth-aauth-protocol-11</code> and announces this at startup; pin a commit and expect wire changes as the specification matures.</span>
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ features -->
+<section class="section" id="features">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Why psd</span>
+      <h2>Small, load-bearing, yours.</h2>
+      <p>The Person Server is where the human's authority enters the system. psd keeps that surface small and does the parts the specification makes hard.</p>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 21 2M17 6l2 2M15 8l2 2"/></svg></div>
+        <h3>Passkeys first</h3>
+        <p>No passwords anywhere. Enrol from a one-time link, log in with a discoverable credential, add more passkeys from the dashboard. Pure-Rust WebAuthn.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+        <h3>Consent that says what it means</h3>
+        <p>The screen names the agent, its provider (verified), the device it claims (marked unverified), and the service's own name and terms — fetched at request time, rendered through a whitelist.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.4 8.5 8 11 4.6-2.5 8-6 8-11V5l-8-3z"/><path d="M9 12l2 2 4-4"/></svg></div>
+        <h3>Key-bound tokens</h3>
+        <p>Every person and auth token carries <code>cnf</code> for the agent's Ed25519 key. A leaked token is inert without the private key; every request is signed (RFC 9421).</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M3 12h3M18 12h3M12 3v3M12 18v3"/></svg></div>
+        <h3>Pairwise identifiers</h3>
+        <p>The <code>sub</code> a service sees is derived per (person, service). Two services cannot join their records to learn it is the same person.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/><path d="M10 11v6M14 11v6"/></svg></div>
+        <h3>Revocation that reaches</h3>
+        <p>Revoke an agent on the dashboard and its auth tokens are revoked at every service that received one — signed by psd as itself. Agent Providers can revoke into psd the same way.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 20V9"/></svg></div>
+        <h3>Missions</h3>
+        <p>An agent proposes a task with its tools and services; the person approves it once, with a lifetime. Every token under it is capped by that lifetime; ending it revokes them.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></div>
+        <h3>A record you can read</h3>
+        <p>Every issuance, denial, revocation and mission event is an audit line (stderr + optional file) and a row the dashboard shows the person under <em>Activity</em>.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="9"/></svg></div>
+        <h3>Hardened egress</h3>
+        <p>psd fetches metadata from URLs an attacker chose. HTTPS only, no redirects, no private addresses, pinned IPs, size and time caps — on every outbound request.</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><path d="M4 9h16"/><path d="M8 13h8M8 16h5"/></svg></div>
+        <h3>Your branding, your pages</h3>
+        <p>Every screen is a server-rendered template embedded in the binary. Point <code>ui.templates_dir</code> at a directory to override any of them by file name.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ docs -->
+<section class="section" id="docs">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Documentation</span>
+      <h2>Read on.</h2>
+      <p>Guides for both audiences, the operator references, and the protocol notes behind the code.</p>
+    </div>
+    <div class="doclinks">
+      <a class="doclink" href="{{ '/docs/protocol.html' | relative_url }}">
+        <span class="k">the protocol</span>
+        <h3>A Person Server, distilled</h3>
+        <p>Parties, the four tokens, the deferred flow, missions, federation — and what psd deliberately does not do.</p>
+        <span class="go">Read <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+      <a class="doclink" href="{{ '/docs/for-people.html' | relative_url }}">
+        <span class="k">for people</span>
+        <h3>Using your Person Server</h3>
+        <p>Enrolling, reading a consent screen, the dashboard, revoking, missions.</p>
+        <span class="go">Open guide <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+      <a class="doclink" href="{{ '/docs/install.html' | relative_url }}">
+        <span class="k">for operators</span>
+        <h3>Install &amp; deploy</h3>
+        <p>Build, keys, issuer, TLS and proxy rules, first person, systemd, backups, upgrades.</p>
+        <span class="go">Open guide <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+      <a class="doclink" href="{{ '/docs/configuration.html' | relative_url }}">
+        <span class="k">reference</span>
+        <h3>Configuration</h3>
+        <p>Every field, its default, and the protocol rule behind it. Environment overrides.</p>
+        <span class="go">Read <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+      <a class="doclink" href="{{ '/docs/api.html' | relative_url }}">
+        <span class="k">reference</span>
+        <h3>HTTP API</h3>
+        <p>Discovery, <code>/person</code>, <code>/pending</code>, <code>/token</code>, <code>/revoke</code>, <code>/mission</code>, and the error vocabulary.</p>
+        <span class="go">Read <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+      <a class="doclink" href="https://agentprovider.dev">
+        <span class="k">the other half</span>
+        <h3>agentprovider.dev</h3>
+        <p>The Agent Provider: cryptographic identity for agents, a hosted sandbox to test against, and the shared protocol library psd builds on.</p>
+        <span class="go">Visit <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+    </div>
+  </div>
+</section>
