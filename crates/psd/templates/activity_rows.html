@@ -1,0 +1,17 @@
+{% if audit %}
+<table>
+  <thead><tr><th>When</th><th>What</th><th>Who</th><th>Subject</th></tr></thead>
+  <tbody>
+  {% for a in audit %}
+    <tr>
+      <td>{{ a.at | datetime }}</td>
+      <td>{{ a.action }}</td>
+      <td><code>{{ a.actor }}</code></td>
+      <td>{% if a.subject %}<code>{{ a.subject }}</code>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">Nothing yet.</p>
+{% endif %}

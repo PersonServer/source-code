@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Your agents · {{ ps_name }}{% endblock %}
+{% block content %}
+{% if pending %}
+<section class="card attention">
+  <h2>Waiting for your decision</h2>
+  <ul>
+  {% for p in pending %}
+    <li><a href="/consent/{{ p.id }}">Agent <code>{{ p.agent_sub }}</code> asks to act at <strong>{{ p.resource }}</strong></a> <span class="muted">(asked {{ p.created_at | datetime }})</span></li>
+  {% endfor %}
+  </ul>
+</section>
+{% endif %}
+<section class="card">
+  <h1>Agents acting for you</h1>
+  {% if bindings %}
+  <table>
+    <thead><tr><th>Agent</th><th>Provider</th><th>Runs on</th><th>Since</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    {% for b in bindings %}
+      <tr>
+        <td><code>{{ b.agent_sub }}</code></td>
+        <td>{% if b.ap_logo_uri %}<img class="logo" src="{{ b.ap_logo_uri }}" alt="">{% endif %}{{ b.ap_name or b.agent_iss }}</td>
+        <td>{% if b.platform or b.device %}{{ b.platform }}{% if b.platform and b.device %} · {% endif %}{{ b.device }} <span class="muted">(unverified, agent-supplied)</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{{ b.bound_at | datetime }}</td>
+        <td>{% if b.status == "active" %}<span class="ok">active</span>{% else %}<span class="muted">revoked {{ b.revoked_at | datetime }}</span>{% endif %}</td>
+        <td>
+          {% if b.status == "active" %}
+          <form method="post" action="/agents/revoke" class="inline">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="agent_iss" value="{{ b.agent_iss }}">
+            <input type="hidden" name="agent_sub" value="{{ b.agent_sub }}">
+            <button type="submit" class="danger">Revoke</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">Revoking stops the agent obtaining new tokens immediately. Tokens it already holds expire within an hour.</p>
+  {% else %}
+  <p>No agent has connected yet. When one asks to act for you, you will decide here.</p>
+  {% endif %}
+</section>
+{% if missions %}
+<section class="card">
+  <h2>Missions</h2>
+  {% for m in missions %}
+  <div class="mission">
+    <div class="fact"><b>{% if m.active %}<span class="ok">active</span>{% else %}<span class="muted">ended ({{ m.termination_reason }})</span>{% endif %}</b>
+      agent <code>{{ m.agent_sub }}</code> · approved {{ m.approved_at | datetime }}{% if m.expires_at %} · until {{ m.expires_at | datetime }}{% endif %} · <span class="muted"><code>{{ m.s256 }}</code></span></div>
+    <div class="md">{{ m.description_html | safe }}</div>
+    {% if m.resources %}<div class="fact"><b>Services</b> {% for r in m.resources %}<code>{{ r }}</code> {% endfor %}</div>{% endif %}
+    {% if m.log %}
+    <details><summary>{{ m.log | length }} update(s)</summary>
+      <ul>{% for e in m.log %}<li>{{ e.at | datetime }} · <em>{{ e.kind }}</em> — <span class="md">{{ e.body_html | safe }}</span></li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+    {% if m.active %}
+    <form method="post" action="/missions/end" class="inline">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="s256" value="{{ m.s256 }}">
+      <button type="submit" class="danger">End mission</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+{% if consents %}
+<section class="card">
+  <h2>What you have allowed</h2>
+  <table>
+    <thead><tr><th>Agent</th><th>Service</th><th>Allowed</th><th>Since</th></tr></thead>
+    <tbody>
+    {% for c in consents %}
+      <tr>
+        <td><code>{{ c.agent_sub }}</code></td>
+        <td><code>{{ c.audience }}</code></td>
+        <td>{% if c.kind == "person" %}to act as you (identity){% else %}{% if c.scope %}<code>{{ c.scope }}</code>{% else %}access as you{% endif %}{% endif %}</td>
+        <td>{{ c.granted_at | datetime }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">Revoking an agent above withdraws everything it was allowed.</p>
+</section>
+{% endif %}
+<section class="card">
+  <h2>Recent activity</h2>
+  {% include "activity_rows.html" %}
+  <p><a href="/activity">All activity</a></p>
+</section>
+<section class="card">
+  <h2>Have a code from an agent?</h2>
+  <form method="get" action="/consent" class="inline">
+    <input type="text" name="code" placeholder="XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false">
+    <button type="submit">Continue</button>
+  </form>
+</section>
+{% endblock %}

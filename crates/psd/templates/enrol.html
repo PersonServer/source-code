@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Set up your passkey · {{ ps_name }}{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>{% if adding %}Add a passkey{% else %}Welcome, {{ display_name }}{% endif %}</h1>
+  {% if adding %}
+    <p>Register another passkey — a second device, or a hardware key — for your account at <strong>{{ ps_name }}</strong>.</p>
+  {% else %}
+    <p>This is your Person Server. It decides which AI agents may act for you, and at which services. There is no password: you sign in with a <strong>passkey</strong> on this device.</p>
+  {% endif %}
+  <p>
+    <button id="passkey-create" class="primary"
+            data-options="{{ options_url }}"
+            data-finish="{{ finish_url }}"
+            data-csrf="{{ csrf }}">Create passkey</button>
+  </p>
+  <p id="passkey-status" class="status" aria-live="polite"></p>
+  <noscript><p class="warn">Creating a passkey needs JavaScript (the WebAuthn API is only reachable from script).</p></noscript>
+</section>
+<script src="/static/passkey.js"></script>
+{% endblock %}

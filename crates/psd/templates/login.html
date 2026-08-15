@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Sign in · {{ ps_name }}{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>Sign in</h1>
+  <p>Use the passkey you registered with <strong>{{ ps_name }}</strong>.</p>
+  <p>
+    <button id="passkey-get" class="primary"
+            data-options="/login/options"
+            data-finish="/login/finish"
+            data-next="{{ next }}">Sign in with a passkey</button>
+  </p>
+  <p id="passkey-status" class="status" aria-live="polite"></p>
+  <noscript><p class="warn">Signing in with a passkey needs JavaScript (the WebAuthn API is only reachable from script).</p></noscript>
+</section>
+<script src="/static/passkey.js"></script>
+{% endblock %}

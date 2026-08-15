@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{% if approved %}Allowed{% else %}Not allowed{% endif %} · {{ ps_name }}{% endblock %}
+{% block content %}
+<section class="card narrow">
+  {% if approved %}
+  <h1>{% if kind == "mission" %}Mission approved{% elif kind == "mission_completion" %}Mission completed{% else %}Allowed{% endif %}</h1>
+  {% if kind == "mission" %}
+  <p>The agent <code>{{ agent_sub }}</code> is being told now. You can review or end the mission from <a href="/">your dashboard</a> at any time.</p>
+  {% elif kind == "mission_completion" %}
+  <p>The mission is ended; the agent <code>{{ agent_sub }}</code> can no longer act under it.</p>
+  {% else %}
+  <p>The agent <code>{{ agent_sub }}</code> can now act at <strong>{{ resource }}</strong> as you. It is being told now; you can close this page.</p>
+  <p>You can revoke this at any time from <a href="/">your agents</a>.</p>
+  {% endif %}
+  {% else %}
+  <h1>{% if kind == "mission_completion" %}Not yet{% else %}Not allowed{% endif %}</h1>
+  {% if kind == "mission_completion" %}
+  <p>The mission stays active; the agent <code>{{ agent_sub }}</code> was told its completion was not accepted.</p>
+  {% else %}
+  <p>The agent <code>{{ agent_sub }}</code> was told that you declined. Nothing was issued.</p>
+  {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = ["crates/psd"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.85"
+repository = "https://github.com/PersonServer/source-code"
+
+[workspace.dependencies]
+# Protocol primitives shared with apd (Agent Provider). Pinned by commit: the
+# AAuth drafts still make wire-format changes and the crate follows them, so a
+# bump here is a deliberate, reviewed act rather than a side effect of
+# `cargo update`. See docs/rfc-psd-implementation.md §7.
+aauth-core = { git = "https://github.com/AgentProvider/source-code", rev = "62f85551d520adc2663c6cbb6e0facbc4e49912a" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "fast", "zeroize"] }
+sha2 = "0.10"
+hmac = "0.12"
+subtle = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal", "io-util", "fs"] }
+hyper = { version = "1", features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "0.26"
+# Relational storage (RFC §7): SQLite is compiled in so the binary stays
+# self-contained; Postgres is a later driver behind the same plain-SQL store.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# Passkey (WebAuthn) relying-party ceremonies. Pure Rust (p256 / ed25519-dalek /
+# rsa) — chosen over `webauthn-rs`, which links OpenSSL and would break the
+# single-static-binary deployment story. `serde_relaxed` accepts what real
+# browsers emit; `custom` lets tests build responses without a browser.
+webauthn_rp = { version = "0.3", features = ["serde_relaxed", "custom"] }
+# Test-only software authenticator (ES256).
+p256 = { version = "0.13", features = ["ecdsa"] }
+# Server-rendered HTML with auto-escaping; built-in templates embedded, an
+# override directory optional. Two transitive deps.
+minijinja = "2"
+# Markdown parsing for attacker-controlled `description`/`justification`; we
+# render the event stream ourselves through a tag whitelist (see markdown.rs).
+pulldown-cmark = { version = "0.12", default-features = false }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"

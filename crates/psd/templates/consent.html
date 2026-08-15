@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Allow this agent? · {{ ps_name }}{% endblock %}
+{% block content %}
+<section class="card narrow consent">
+  {% if new_agent %}
+  <p class="banner">This is a <strong>new agent</strong> — it has never acted for you before. If you did not just ask an agent to do something, choose <em>Don't allow</em>.</p>
+  {% endif %}
+  {% if kind == "auth" %}
+  <h1>Allow this agent to access this service as you?</h1>
+  {% elif kind == "mission" %}
+  <h1>Approve this mission?</h1>
+  {% elif kind == "mission_completion" %}
+  <h1>Is this mission complete?</h1>
+  {% else %}
+  <h1>Allow this agent to act at this service as you?</h1>
+  {% endif %}
+
+  <div class="fact"><b>Agent</b> <code>{{ agent_sub }}</code></div>
+  <div class="fact"><b>Agent provider</b>
+    {% if ap_logo_uri %}<img class="logo" src="{{ ap_logo_uri }}" alt="">{% endif %}
+    {% if ap_name %}{{ ap_name }} <span class="muted">({{ agent_iss }})</span>{% else %}{{ agent_iss }}{% endif %}
+  </div>
+  {% if chained %}
+  <div class="fact"><b>Chained</b> this request comes from a <em>service</em> acting on an authorization you gave earlier (<code>{{ chained.upstream_aud }}</code>{% if chained.upstream_scope %}, scope <code>{{ chained.upstream_scope }}</code>{% endif %}), reaching a further service on your behalf.</div>
+  {% endif %}
+  {% if subagent_sub %}
+  <div class="fact"><b>On behalf of</b> sub-agent <code>{{ subagent_sub }}</code> <span class="muted">(the token will be bound to its key; your decision covers the parent above)</span></div>
+  {% endif %}
+  {% if platform or device %}
+  <div class="fact"><b>Says it runs on</b> {{ platform }}{% if platform and device %} · {% endif %}{{ device }} <span class="muted">— unverified, supplied by the agent</span></div>
+  {% endif %}
+
+  {% if kind == "mission" or kind == "mission_completion" %}
+  <hr>
+  {% if kind == "mission" %}
+  <div class="fact"><b>Proposes to</b><div class="md">{{ mission.description_html | safe }}</div></div>
+  {% if mission.tools %}
+  <div class="fact"><b>Using tools</b>
+    <ul>{% for t in mission.tools %}<li><code>{{ t.name }}</code> — {{ t.description }}</li>{% endfor %}</ul>
+    <span class="muted">(declared by the agent; nothing enforces this list)</span>
+  </div>
+  {% endif %}
+  {% if mission.resources %}
+  <div class="fact"><b>Will use services</b>
+    <ul>{% for r in mission.resources %}<li>{% if r.name %}<strong>{{ r.name }}</strong> <span class="muted">({{ r.resource }})</span>{% else %}<code>{{ r.resource }}</code>{% endif %} — access mode <code>{{ r.access_mode }}</code></li>{% endfor %}</ul>
+    <span class="muted">Approving issues the agent a token for each of these, valid for the mission's lifetime (at most an hour at a time). It may ask for others later; you decide each.</span>
+  </div>
+  {% endif %}
+  <div class="fact"><b>Runs until</b>
+    <select name="expires" form="decision">
+      <option value="3600">1 hour</option>
+      <option value="86400" selected>1 day</option>
+      <option value="604800">1 week</option>
+      <option value="2592000">30 days</option>
+      <option value="never">no expiry — until you end it here (least safe)</option>
+    </select>
+    <span class="muted">Every token issued under the mission stops at this time; you can end it earlier from your dashboard.</span>
+  </div>
+  <p class="question">A mission does not grant access by itself: each service still asks you, or applies its own policy, and every decision is recorded against this mission so you can review what the agent did.</p>
+  {% else %}
+  <div class="fact"><b>Mission</b><div class="md">{{ mission.description_html | safe }}</div> <span class="muted">(<code>{{ mission.s256 }}</code>)</span></div>
+  <div class="fact"><b>Agent reports</b><div class="md">{{ mission.summary_html | safe }}</div><span class="muted">(written by the agent, unverified)</span></div>
+  <p class="question">Accepting ends the mission for good — the agent can no longer act under it. If it is not finished, choose <em>Not yet</em> and the mission stays active.</p>
+  {% endif %}
+  {% else %}
+  <hr>
+  <div class="fact"><b>Service</b>
+    {% if resource_meta and resource_meta.logo_uri %}<img class="logo" src="{{ resource_meta.logo_uri }}" alt="">{% endif %}
+    {% if resource_meta and resource_meta.name %}<strong>{{ resource_meta.name }}</strong> <span class="muted">({{ resource }})</span>{% else %}<code>{{ resource }}</code>{% endif %}
+  </div>
+  {% if resource_meta %}
+    {% if resource_meta.description_html %}
+    <div class="fact"><b>Describes itself as</b><div class="md">{{ resource_meta.description_html | safe }}</div></div>
+    {% endif %}
+    <div class="fact"><b>Access</b>
+      {% if resource_meta.access_mode == "person-token" %}
+        <strong>on your identity alone</strong> — with this token the agent can use whatever this service gives a recognised person, without asking you again.
+      {% elif resource_meta.access_mode == "auth-token" %}
+        this service will ask you separately before granting the agent specific permissions; this token only tells it who the agent acts for.
+      {% elif resource_meta.access_mode == "agent-token" %}
+        this service normally works with agent identity only; the agent is asking to be recognised as acting for you there.
+      {% else %}
+        <code>{{ resource_meta.access_mode }}</code>
+      {% endif %}
+    </div>
+  {% else %}
+    <div class="fact"><b>Describes itself as</b> <span class="muted">this service publishes no description (no <code>aauth-resource.json</code> could be fetched)</span></div>
+  {% endif %}
+
+  {% endif %}
+  {% if kind == "auth" %}
+    <div class="fact"><b>Asks for</b>
+      {% if scopes %}
+      <ul class="scopes">
+      {% for s in scopes %}
+        <li><code>{{ s.name }}</code>{% if s.description_html %} — <span class="md">{{ s.description_html | safe }}</span>{% endif %}</li>
+      {% endfor %}
+      </ul>
+      {% else %}
+      <span class="muted">no specific permissions — access on your identity alone</span>
+      {% endif %}
+    </div>
+    {% if justification_html %}
+    <div class="fact"><b>Agent's reason</b><div class="md">{{ justification_html | safe }}</div><span class="muted">(written by the agent, unverified)</span></div>
+    {% endif %}
+    <p class="question">If you allow, the agent gets a token that <strong>{% if resource_meta and resource_meta.name %}{{ resource_meta.name }}{% else %}{{ resource }}{% endif %}</strong> will accept for these permissions, as you, for up to an hour at a time — and this decision is remembered until you revoke the agent here.</p>
+  {% else %}
+  <p class="question">Holding this token, the agent can act at <strong>{% if resource_meta and resource_meta.name %}{{ resource_meta.name }}{% else %}{{ resource }}{% endif %}</strong> as you until you revoke it here. The service will see a pseudonym for you that is specific to it.</p>
+  {% endif %}
+
+  <form id="decision" method="post" action="/consent/{{ pending_id }}" class="actions">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% if kind == "mission" %}
+    <button type="submit" name="action" value="approve" class="primary">Approve mission</button>
+    <button type="submit" name="action" value="deny">Don't approve</button>
+    {% elif kind == "mission_completion" %}
+    <button type="submit" name="action" value="approve" class="primary">Yes, complete</button>
+    <button type="submit" name="action" value="deny">Not yet</button>
+    {% else %}
+    <button type="submit" name="action" value="approve" class="primary">Allow</button>
+    <button type="submit" name="action" value="deny">Don't allow</button>
+    {% endif %}
+  </form>
+
+  <details>
+    <summary>Technical details</summary>
+    <pre>{{ details_json }}</pre>
+  </details>
+</section>
+{% endblock %}

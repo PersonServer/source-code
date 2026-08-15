@@ -1,0 +1,29 @@
+{
+  "issuer": "https://ps.example.com",
+  "listen": "127.0.0.1:8430",
+  "keys_file": "/var/lib/psd/psd-keys.json",
+  "storage": { "backend": "sqlite", "path": "/var/lib/psd/psd.db" },
+
+  "person_token_ttl_secs": 3600,
+  "auth_token_ttl_secs": 3600,
+  "signature_window_secs": 60,
+  "resource_token_max_age_secs": 300,
+  "retention_slack_secs": 3600,
+
+  "directed_sub": { "mode": "pairwise" },
+  "person_auth": { "method": "passkey" },
+  "notify": { "channels": ["web"], "webhook_url": null },
+  "limits": { "resources_per_agent_per_day": 50, "code_attempts": 5, "pending_ttl_secs": 600 },
+  "ui": { "session_ttl_secs": 43200, "templates_dir": null },
+
+  "missions": { "enabled": false },
+  "federation": { "enabled": false },
+
+  "metadata": {
+    "name": "Example Person Server",
+    "description": "Manage which agents act for you and review what they do.",
+    "documentation_uri": "https://personserver.dev/docs/"
+  },
+  "telemetry": { "enabled": false, "endpoint": "http://localhost:4318" },
+  "insecure_dev_mode": false
+}

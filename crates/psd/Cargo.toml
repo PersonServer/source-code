@@ -1,0 +1,35 @@
+[package]
+name = "psd"
+description = "psd — a self-hostable AAuth Person Server daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "psd"
+path = "src/main.rs"
+
+[dependencies]
+aauth-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ed25519-dalek.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+subtle.workspace = true
+tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+webpki-roots.workspace = true
+rusqlite.workspace = true
+webauthn_rp.workspace = true
+minijinja.workspace = true
+pulldown-cmark.workspace = true
+
+[dev-dependencies]
+p256.workspace = true

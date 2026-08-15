@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · {{ ps_name }}{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>{{ title }}</h1>
+  <p>{{ detail }}</p>
+  {% if person %}<p><a href="/">Back to your agents</a></p>{% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Activity · {{ ps_name }}{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Activity</h1>
+  {% include "activity_rows.html" %}
+</section>
+{% endblock %}

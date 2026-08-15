@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Passkeys · {{ ps_name }}{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Your passkeys</h1>
+  <table>
+    <thead><tr><th>Passkey</th><th>Registered</th><th>Last used</th></tr></thead>
+    <tbody>
+    {% for c in credentials %}
+      <tr>
+        <td>{{ c.nickname or "passkey" }} <span class="muted"><code>{{ c.cred_id_short }}</code></span></td>
+        <td>{{ c.created_at | datetime }}</td>
+        <td>{% if c.last_used_at %}{{ c.last_used_at | datetime }}{% else %}<span class="muted">never</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p><a class="button" href="/passkeys/add">Add a passkey</a></p>
+</section>
+{% endblock %}

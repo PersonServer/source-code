@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ ps_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/psd.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">{{ ps_name }}</a>
+  <nav>
+    {% if person %}
+      <span class="who">{{ person.display_name }}</span>
+      <a href="/">Agents</a>
+      <a href="/activity">Activity</a>
+      <a href="/passkeys">Passkeys</a>
+      <form method="post" action="/logout" class="inline">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button type="submit" class="link">Sign out</button>
+      </form>
+    {% endif %}
+  </nav>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+<footer class="foot">
+  <span>psd {{ version }} · AAuth Person Server · issuer <code>{{ issuer }}</code></span>
+</footer>
+</body>
+</html>
