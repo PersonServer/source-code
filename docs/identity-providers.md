@@ -35,6 +35,21 @@ What every provider has in common:
 - Offboarding at the provider stops sign-ins, not agents:
   [`psd person deactivate`](cli.md#person-deactivate-person-activate).
 
+**If you also run apd.** [apd](https://agentprovider.dev)'s admin SSO
+validates an *access token* an operator's tool presents to its API; psd
+validates an *ID token* it fetched itself from the provider's token
+endpoint, with client authentication and PKCE, in the request that spent
+the code. Three checks differ because of that one fact and not because
+either side is looser: psd requires `azp` to name its client when `aud` is
+plural (for an ID token `aud` is the client, so the check means something;
+on an access token `aud` is the API and `azp` the client, so apd relies on
+`aud` alone); psd *records* a `cnf` claim rather than refusing it (nothing
+presents the ID token as a bearer, so there is no sender constraint to
+downgrade; apd refuses `cnf` because its bearer token could be a DPoP token
+being downgraded); and group claims come from the ID token here and from
+the access token there. The operator-visible surface — field names, the
+two gate messages, this page's structure — is the same on both.
+
 ## Okta
 
 **Issuer.** Okta has two kinds of authorization server and both work for

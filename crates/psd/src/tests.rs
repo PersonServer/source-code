@@ -5145,6 +5145,9 @@ mod oidc_tests {
         nonce_override: Arc<StdMutex<Option<String>>>,
         kid_override: Arc<StdMutex<Option<String>>>,
         alg_none: Arc<StdMutex<bool>>,
+        /// Flip a byte of the signature: the token must then fail for that
+        /// reason and no other, so a test cannot pass by skipping the check.
+        tamper: Arc<StdMutex<bool>>,
         _handle: tokio::task::JoinHandle<()>,
     }
 
@@ -5229,6 +5232,7 @@ mod oidc_tests {
         nonce_override: Arc<StdMutex<Option<String>>>,
         kid_override: Arc<StdMutex<Option<String>>>,
         alg_none: Arc<StdMutex<bool>>,
+        tamper: Arc<StdMutex<bool>>,
         aud_array: Arc<StdMutex<(bool, bool)>>,
         /// (discovery, token, jwks) paths.
         paths: (&'static str, &'static str, &'static str),
@@ -5322,10 +5326,18 @@ mod oidc_tests {
                 format!("{h}.{p}.")
             } else {
                 // Okta's header carries no typ; a JWT header need not.
-                self.signer.sign(
+                let t = self.signer.sign(
                     &serde_json::json!({"alg": self.signer.alg(), "kid": use_kid}),
                     &payload,
-                )
+                );
+                if *self.tamper.lock().unwrap() {
+                    let mut chars: Vec<char> = t.chars().collect();
+                    let last = chars.len() - 1;
+                    chars[last] = if chars[last] == 'A' { 'B' } else { 'A' };
+                    chars.into_iter().collect()
+                } else {
+                    t
+                }
             };
             (200, serde_json::json!({ "access_token": "at", "token_type": "Bearer", "id_token": id_token }).to_string())
         }
@@ -5438,6 +5450,7 @@ mod oidc_tests {
             nonce_override: Default::default(),
             kid_override: Default::default(),
             alg_none: Arc::new(StdMutex::new(false)),
+            tamper: Arc::new(StdMutex::new(false)),
             aud_array: Arc::new(StdMutex::new((false, true))),
             paths,
             disc_s,
@@ -5452,6 +5465,7 @@ mod oidc_tests {
             nonce_override: st.nonce_override.clone(),
             kid_override: st.kid_override.clone(),
             alg_none: st.alg_none.clone(),
+            tamper: st.tamper.clone(),
             _handle: tokio::spawn(async move {
                 loop {
                     let (stream, _) = match listener.accept().await {
@@ -6098,6 +6112,16 @@ mod oidc_tests {
             app.store.get_person(&person).unwrap().unwrap().display_name,
             "Alice Example"
         );
+
+        // A tampered RS256 signature over the same route: refused for that
+        // reason and no other (the fixture cannot pass by skipping the check).
+        *idp.tamper.lock().unwrap() = true;
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, page, _) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{page}");
+        assert!(page.contains("could not be verified"), "{page}");
+        *idp.tamper.lock().unwrap() = false;
 
         // Array aud with azp naming us: accepted. Without azp: refused.
         *idp.aud_array.lock().unwrap() = (true, true);
