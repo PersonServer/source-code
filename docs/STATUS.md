@@ -6,8 +6,12 @@ are in [DECISIONS.md](DECISIONS.md); this file is the "what is built, how to
 check it, what is open" companion.
 
 Last updated: 2026-08-15. Build: 110 tests, `cargo clippy --workspace
---all-targets -- -D warnings` clean, `cargo fmt --check` clean. Working tree
-uncommitted (awaiting the human's instruction on commits).
+--all-targets -- -D warnings` clean, `cargo fmt --check` clean. Pushed to
+`github.com/PersonServer/source-code` (main); CI (fmt · clippy · test · helm
+· docker) on every push, `edge` image + chart on main, `release` on `v*`
+tags. Site: `personserver.dev` from this tree via GitHub Pages
+(`_config.yml`, `index.html`, `docs/*.md`); needs the domain's A/AAAA
+records pointed at GitHub Pages to resolve.
 
 ## Milestones
 
