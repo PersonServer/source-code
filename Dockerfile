@@ -17,11 +17,14 @@ FROM rust:1-bookworm AS builder
 ARG TARGETARCH
 WORKDIR /src
 
-# BuildKit caches the cargo registry and a per-arch target dir across builds.
+# BuildKit caches the cargo registry, the git checkouts and the target dir
+# across builds — all three keyed per arch. A multi-platform build runs the
+# amd64 and arm64 stages concurrently, and two cargos unpacking crates into
+# one shared registry cache race ("failed to unpack package … File exists").
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=psd-cargo-registry-${TARGETARCH} \
+    --mount=type=cache,target=/usr/local/cargo/git,id=psd-cargo-git-${TARGETARCH} \
     --mount=type=cache,target=/src/target,id=psd-target-${TARGETARCH} \
     cargo build --release --locked --bin psd \
     && strip target/release/psd \
