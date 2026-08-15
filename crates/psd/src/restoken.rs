@@ -77,7 +77,7 @@ pub async fn verify(
         .ok_or_else(|| invalid("missing kid"))?;
     reqctx::verify_jwt_via_discovery(app, &decoded, &iss, "aauth-resource.json", kid)
         .await
-        .map_err(|e| invalid(format!("signature not verified: {e}")))?;
+        .map_err(|e| e.into_api(|s| invalid(format!("signature not verified: {s}"))))?;
     // 3. exp / iat, and the lifetime we accept
     let exp = p.int_claim("exp").ok_or_else(|| invalid("missing exp"))?;
     let iat = p.int_claim("iat").ok_or_else(|| invalid("missing iat"))?;

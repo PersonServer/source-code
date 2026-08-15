@@ -5,7 +5,7 @@ review channel between sessions is lossy. Decisions and their draft citations
 are in [DECISIONS.md](DECISIONS.md); this file is the "what is built, how to
 check it, what is open" companion.
 
-Last updated: 2026-08-15. Build: 110 tests, `cargo clippy --workspace
+Last updated: 2026-08-15. Build: 111 tests, `cargo clippy --workspace
 --all-targets -- -D warnings` clean, `cargo fmt --check` clean. Pushed to
 `github.com/PersonServer/source-code` (main); CI (fmt · clippy · test · helm
 · docker) on every push, `edge` image + chart on main, `release` on `v*`
@@ -33,7 +33,7 @@ person auth.
 ## How to check it
 
 ```sh
-cargo test                                          # 110 tests, no network
+cargo test                                          # 111 tests, no network
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 

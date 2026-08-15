@@ -505,6 +505,44 @@ async fn jwks_is_cached_across_requests_and_kid_rotation_refreshes() {
     assert_eq!(hdr(&headers, "signature-error"), Some("error=unknown_key"));
 }
 
+#[tokio::test]
+async fn unreachable_agent_provider_is_503_not_unknown_key() {
+    // The AP goes away between issuing the token and our first request for
+    // it. We cannot verify — but that is *our* inability to consult the
+    // issuer, not a verdict on the agent's key: 503 + Retry-After, no
+    // Signature-Error, so the agent backs off instead of re-enrolling.
+    let ap = spawn_mock_ap("ap-key-1", MockApOpts::default()).await;
+    let app = default_app();
+    let agent = new_agent();
+    let ctx = signed_person(&ap, &agent, 3600);
+    ap._handle.abort();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let (status, body, headers) = call(&app, Method::POST, "/person", ctx).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"], "temporarily_unavailable");
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap()
+            .contains("not a statement about your key"),
+        "{body}"
+    );
+    assert!(
+        hdr(&headers, "signature-error").is_none(),
+        "no signature verdict"
+    );
+    let retry: u64 = hdr(&headers, "retry-after").unwrap().parse().unwrap();
+    assert!((1..=60).contains(&retry));
+    // Within the fetch floor the answer is the same 503 (the failed attempt
+    // consumed the minute), never unknown_key: we still have not seen a JWKS.
+    let ctx = signed_person(&ap, &agent, 3600);
+    let (status, body, headers) = call(&app, Method::POST, "/person", ctx).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"], "temporarily_unavailable");
+    let retry: u64 = hdr(&headers, "retry-after").unwrap().parse().unwrap();
+    assert!((1..=60).contains(&retry));
+}
+
 // ------------------------------------------------------- failure paths (401)
 
 #[tokio::test]

@@ -79,7 +79,7 @@ async fn token_endpoint(app: &Arc<App>, as_iss: &str) -> Result<String, ApiError
         .jwks_cache
         .get_metadata(as_iss, "aauth-access.json")
         .await
-        .map_err(|e| as_error(format!("metadata for {as_iss}: {e}")))?;
+        .map_err(|e| e.into_api(|s| as_error(format!("metadata for {as_iss}: {s}"))))?;
     let ep = meta
         .get("auth_token_endpoint")
         .and_then(|v| v.as_str())
@@ -310,7 +310,7 @@ async fn verify_as_auth_token(
         .ok_or_else(|| as_error("auth token has no kid"))?;
     reqctx::verify_jwt_via_discovery(app, &decoded, &expect.as_iss, "aauth-access.json", kid)
         .await
-        .map_err(|e| as_error(format!("auth token signature: {e}")))?;
+        .map_err(|e| e.into_api(|s| as_error(format!("auth token signature: {s}"))))?;
     let now = aauth_core::now_unix() as i64;
     let exp = p
         .int_claim("exp")

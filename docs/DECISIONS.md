@@ -88,6 +88,28 @@ Conventions: **D-n** = decision; ✅ agreed with the `apd` reviewer;
   `unknown_key`.
 - **D-16 ✅ `unsupported_scheme` responses carry `Accept-Signature-Scheme:
   jwt`;** `unsupported_algorithm` carries `Accept-Signature-Alg: Ed25519`.
+- **D-65 🟡 A discovery fetch that fails is `503 temporarily_unavailable` +
+  `Retry-After`, never `unknown_key`.** Found live: `sandbox.personserver.dev`
+  answered `401 unknown_key` for a valid token whose `kid` was the only key
+  in its Agent Provider's JWKS — because the metadata/JWKS fetch had failed
+  (and the failed attempt then held the once-per-minute floor). The sig-key
+  draft defines `unknown_key` as "does not match any key at the client's
+  jwks_uri" and `cache_miss` as the `cached`-scheme identifier miss; neither
+  describes "I could not ask". Reporting a fetch failure as `unknown_key`
+  tells the agent its credential is wrong and sends its developer to
+  re-enrol. So the cache distinguishes *the issuer answered* (kid absent →
+  `unknown_key`; metadata/JWKS invalid → `issuer_*`/`invalid_key`) from *the
+  issuer could not be consulted* (fetch failed, or the floor is held by a
+  failed attempt): the latter is `503` with `error: temporarily_unavailable`,
+  `Retry-After` = seconds until a fetch may be retried, no `Signature-Error`
+  (nothing is known against the credential), and an audit event
+  `discovery_unavailable` naming the issuer and the reason, so an operator
+  sees an egress problem as one. Fits the draft's deferred-response state
+  machine ("503 → back off per Retry-After, retry"). Under an active floor
+  after a *successful* fetch, the fresh key set is authoritative: kid in it →
+  used, kid absent → `unknown_key`. Applies to every discovery — agent
+  tokens, resource tokens, upstream and Access Server tokens — because the
+  reason is the same for all of them.
 
 ## Person token issuance (§Person Token Endpoint, §Person Token Structure)
 

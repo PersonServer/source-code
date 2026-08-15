@@ -247,7 +247,11 @@ events deserve an alert if you have one: `resource_token_mismatch` (a
 service presented a resource token that names a person token psd issued —
 but for a different agent, person or mission; the service is confused or
 hostile) and repeated `person_token_denied` with `reason: too_many_resources`
-(an agent probing many services).
+(an agent probing many services). A third, `discovery_unavailable`, means
+psd could not fetch an issuer's metadata or JWKS and answered the agent
+`503`: usually your egress (DNS, firewall, a proxy that rewrites responses),
+sometimes their outage — either way the agent is not at fault, and the
+event names the issuer and the reason.
 
 ### Backups
 

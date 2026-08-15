@@ -80,7 +80,7 @@ pub async fn verify(
     } else {
         reqctx::verify_jwt_via_discovery(app, &decoded, &iss, &dwk, kid)
             .await
-            .map_err(|e| invalid(format!("signature not verified: {e}")))?;
+            .map_err(|e| e.into_api(|s| invalid(format!("signature not verified: {s}"))))?;
     }
     let exp = p.int_claim("exp").ok_or_else(|| invalid("missing exp"))?;
     if exp <= now as i64 {

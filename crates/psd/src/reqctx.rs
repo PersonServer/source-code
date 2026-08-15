@@ -41,6 +41,7 @@ use hyper::{Request, StatusCode};
 use sha2::{Digest, Sha256, Sha512};
 
 use crate::app::App;
+use crate::jwks_cache::LookupError;
 use crate::problem::ApiError;
 
 pub struct ReqCtx {
@@ -397,7 +398,7 @@ pub async fn verify_server_request(
             .jwks_cache
             .get_key(&id, &dwk, &kid)
             .await
-            .map_err(ApiError::from_sig_error)?;
+            .map_err(|e| e.into_api(ApiError::from_sig_error))?;
         if let Err(e) = sig::verify_parsed(&parsed, &key) {
             // Silent re-keying: refresh once and retry.
             let key = app
@@ -480,7 +481,7 @@ pub async fn verify_foreign_agent_token(
 
     verify_jwt_via_discovery(app, &decoded, iss, dwk, kid)
         .await
-        .map_err(ApiError::from_sig_error)?;
+        .map_err(|e| e.into_api(ApiError::from_sig_error))?;
     tokens::validate_agent_token(&decoded, now, app.cfg.insecure_dev_mode).map_err(|e| {
         let msg = e.to_string();
         if msg.contains("expired") {
@@ -502,14 +503,29 @@ pub async fn verify_jwt_via_discovery(
     iss: &str,
     dwk: &str,
     kid: &str,
-) -> Result<(), SigError> {
-    let key = app.jwks_cache.get_key(iss, dwk, kid).await?;
+) -> Result<(), LookupError> {
+    let key = match app.jwks_cache.get_key(iss, dwk, kid).await {
+        Ok(k) => k,
+        Err(e) => {
+            // A discovery failure is an operational event — our egress or
+            // their uptime — that an operator needs to see, because the agent
+            // on the other end only sees a 503.
+            if let LookupError::Unavailable { detail, .. } = &e {
+                app.audit.emit(
+                    "discovery_unavailable",
+                    serde_json::json!({ "iss": iss, "dwk": dwk, "kid": kid, "detail": detail }),
+                );
+            }
+            return Err(e);
+        }
+    };
     match jwt::verify_with_jwk(decoded, &key) {
         Ok(()) => Ok(()),
         Err(jwt::JwtError::UnsupportedAlgorithm) => Err(SigError::new(
             SigErrorCode::UnsupportedAlgorithm,
             "token alg is not Ed25519",
-        )),
+        )
+        .into()),
         Err(_) => {
             // Silent re-keying under the same kid: refresh once and retry
             // (subject to the fetch floor). If the refresh cannot happen
@@ -517,18 +533,14 @@ pub async fn verify_jwt_via_discovery(
             // if the refreshed JWKS no longer has the kid → unknown_key.
             match app.jwks_cache.refresh_and_get(iss, dwk, kid).await {
                 Ok(key) => jwt::verify_with_jwk(decoded, &key).map_err(|_| {
-                    SigError::new(SigErrorCode::InvalidJwt, "token signature invalid")
+                    SigError::new(SigErrorCode::InvalidJwt, "token signature invalid").into()
                 }),
-                Err(e)
-                    if e.code == SigErrorCode::UnknownKey
-                        && !e.detail.contains(crate::jwks_cache::FLOOR_NOTE) =>
-                {
-                    Err(e)
+                Err(LookupError::Sig(e)) if e.code == SigErrorCode::UnknownKey => {
+                    Err(LookupError::Sig(e))
                 }
-                Err(_) => Err(SigError::new(
-                    SigErrorCode::InvalidJwt,
-                    "token signature invalid",
-                )),
+                Err(_) => {
+                    Err(SigError::new(SigErrorCode::InvalidJwt, "token signature invalid").into())
+                }
             }
         }
     }

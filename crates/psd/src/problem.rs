@@ -70,6 +70,23 @@ impl ApiError {
         ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "server_error", detail)
     }
 
+    /// `503 temporarily_unavailable` with `Retry-After`: this server could not
+    /// do its part right now — typically a third party it must consult (an
+    /// Agent Provider's JWKS, a resource's metadata) could not be fetched.
+    /// Deliberately not a `401`: nothing is known against the caller's
+    /// credential, and the draft's deferred-response state machine tells the
+    /// agent to back off per `Retry-After` and retry a `503`.
+    pub fn unavailable(detail: impl Into<String>, retry_after_secs: u64) -> ApiError {
+        let mut e = ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "temporarily_unavailable",
+            detail,
+        );
+        e.headers
+            .push(("retry-after", retry_after_secs.to_string()));
+        e
+    }
+
     /// Attach an extra problem-details member.
     pub fn with_member(mut self, name: &str, value: serde_json::Value) -> ApiError {
         self.extra.insert(name.to_string(), value);

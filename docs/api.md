@@ -29,7 +29,11 @@ revoked; the key in `cnf.jwk` signed the request within
 `signature_window_secs`; the `Content-Digest` matches the body; a
 body-carrying request is not a replay of a signature already seen; a
 sub-agent's `parent_agent` is present only where allowed. Failing any of
-these is `401` with a `Signature-Error` header naming the reason.
+these is `401` with a `Signature-Error` header naming the reason. If the
+Agent Provider's metadata or JWKS **cannot be fetched** at all, the answer is
+`503 temporarily_unavailable` with `Retry-After` — psd could not ask, which
+is not a verdict on the token, so there is no `Signature-Error` and the
+agent should simply retry after the delay.
 
 **`/revoke` is signed by a server, not an agent**: `scheme=jwks_uri`, the
 signer's key resolved from its metadata document. An agent token there —
@@ -37,8 +41,9 @@ or a server key on an agent endpoint — is `401 unsupported_scheme` with an
 `Accept-Signature-Scheme` header naming what is accepted.
 
 **Errors are RFC 9457 problem details** (`application/problem+json`) with
-`error` and `error_description`, plus `Signature-Error` on `401`. A `403`
-never negotiates signatures. Bodies are limited to `max_body_bytes`.
+`error` (the machine-readable code) and `detail` (a sentence about this
+occurrence), plus `Signature-Error` on `401`. A `403` never negotiates
+signatures. Bodies are limited to `max_body_bytes`.
 
 **Deferred answers are `202 Accepted`.** When the person must decide, the
 response carries:
@@ -311,6 +316,7 @@ that reveals nothing. For this agent's ended mission it is
 | 410 | `gone` | pending result already delivered |
 | 429 | `too_many_requests` (+ `Retry-After`) | distinct-resource limit |
 | 500 | `server_error` | |
+| 503 | `temporarily_unavailable` (+ `Retry-After`) | psd could not consult a party it must — an Agent Provider's, resource's or Access Server's metadata or JWKS could not be fetched, or the once-per-minute fetch floor is held by such a failure. Not a verdict on your credential: no `Signature-Error`; back off for `Retry-After` seconds and retry unchanged |
 
 ## The human surface
 

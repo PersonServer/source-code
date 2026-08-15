@@ -154,8 +154,10 @@ Two audit events mean something is wrong outside psd:
   misconfigured agent.
 
 Also: `revocation_refused` (someone other than a token's issuer tried to
-revoke it), and repeated `401`s from one Agent Provider (its metadata may
-have moved).
+revoke it), `discovery_unavailable` (psd could not fetch an issuer's
+metadata or JWKS and answered `503` rather than judging the token — check
+egress before anything else), and repeated `401`s from one Agent Provider
+(its metadata may have moved).
 
 ## What psd does not guarantee
 
