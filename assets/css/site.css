@@ -366,13 +366,20 @@ code, kbd, pre { font-family: var(--font-mono); font-size: 0.9em; }
 
 /* ---------------------------------------------------------------- footer */
 .footer { border-top: 1px solid var(--border); padding: 44px 0; background: var(--bg-subtle); }
-.footer .wrap { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 28px; }
+.footer .wrap { display: grid; grid-template-columns: 1.3fr repeat(3, 1fr); gap: 28px; }
 .footer .col h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted-fg); margin: 0 0 12px; font-weight: 600; }
 .footer .col a { display: block; color: var(--fg-soft); font-size: 14px; padding: 4px 0; transition: color .15s; }
 .footer .col a:hover { color: var(--accent); }
+/* `.footer .col a` makes links block-level, which would stack the brand mark
+   above its name; the brand stays a flex row. */
+.footer .col a.brand { display: inline-flex; }
 .footer .about p { color: var(--muted-fg); font-size: 13.5px; margin: 12px 0 0; max-width: 34ch; }
 .footer .legal { border-top: 1px solid var(--border); margin-top: 28px; padding-top: 20px; font-size: 12.5px; color: var(--muted-fg); }
 .footer .legal .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+/* The global `a { text-decoration: none }` would render a legal-bar link as
+   plain text; make it visibly a link. */
+.footer .legal a { color: var(--fg-soft); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--border-strong); }
+.footer .legal a:hover { color: var(--accent); text-decoration-color: var(--accent); }
 
 /* ---------------------------------------------------------------- demo note */
 .demo-note {

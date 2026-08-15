@@ -50,6 +50,12 @@ minutes, no code.
   public sandbox with open enrollment, which is the easiest way to get a real
   agent token to test psd with. psd builds on the same protocol library,
   [`aauth-core`](https://github.com/AgentProvider/source-code/tree/main/crates/aauth-core).
+- **[agentd.dev](https://agentd.dev)** — a minimal, MCP-native agent
+  runtime that enrols with an Agent Provider, holds its own key and signs
+  every request: the kind of agent that appears on psd's consent screen.
+- **[mcpg.dev](https://mcpg.dev)** — a governed MCP endpoint that verifies
+  the per-request agent signature in front of your MCP servers: the kind of
+  resource psd's tokens are presented to.
 - **[The AAuth drafts](https://github.com/dickhardt/AAuth)** — psd tracks
   `draft-hardt-oauth-aauth-protocol-11` and `draft-hardt-httpbis-signature-key-08`.
   Both are IETF Internet-Drafts, not released standards; wire formats change

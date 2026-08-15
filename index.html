@@ -307,3 +307,34 @@ description: A Person Server is the part of AAuth that speaks for the human — 
     </div>
   </div>
 </section>
+
+<!-- ============================================================ the other sides -->
+<section class="section" id="ecosystem">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">The other sides</span>
+      <h2>psd is the person's side. The rest of the exchange:</h2>
+      <p>AAuth splits the job across parties run by different people, and none registers with the others. These are the pieces built alongside psd — each labelled by whose side of the exchange it serves.</p>
+    </div>
+    <div class="doclinks">
+      <a class="doclink" href="https://agentprovider.dev">
+        <span class="k">the agent's identity</span>
+        <h3>apd — Agent Provider</h3>
+        <p>Issues the short-lived, key-bound <code>aa-agent+jwt</code> identities psd verifies. Self-hostable, same shape as psd; a hosted sandbox with open enrollment to test against.</p>
+        <span class="go">agentprovider.dev <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+      <a class="doclink" href="https://agentd.dev">
+        <span class="k">the agent's side</span>
+        <h3>agentd — agent runtime</h3>
+        <p>A minimal, MCP-native runtime that enrols with an Agent Provider, holds its own Ed25519 key and signs every request — the kind of agent that shows up on psd's consent screen.</p>
+        <span class="go">agentd.dev <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+      <a class="doclink" href="https://mcpg.dev">
+        <span class="k">the resource's side</span>
+        <h3>mcpg — MCP gateway</h3>
+        <p>One governed endpoint in front of your MCP servers: verifies the per-request agent signature, applies per-person permissions, keeps the audit trail. The service psd's tokens are presented to.</p>
+        <span class="go">mcpg.dev <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+      </a>
+    </div>
+  </div>
+</section>
