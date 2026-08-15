@@ -164,7 +164,8 @@ this specific access", after a resource asked for it with a resource token.
 <dt>upstream_token</dt><dd>Optional (federation on). Call chaining; the person it names must be the person the resource token's <code>presented_jti</code> record names.</dd>
 <dt>prompt</dt><dd>Optional, space-separated: <code>none</code>, <code>login</code>, <code>consent</code>, <code>select_account</code>. <code>consent</code> forces the screen even when consent is on record; <code>none</code> forbids interaction and cannot be combined with the others.</dd>
 <dt>justification</dt><dd>Optional Markdown (≤ 8 KiB) the agent gives the person for asking; rendered through a whitelist, marked as the agent's own words.</dd>
-<dt>capabilities</dt><dd>Optional list of strings; recorded.</dd>
+<dt>capabilities</dt><dd>Optional list of strings; recorded with the request.</dd>
+<dt>platform, device, login_hint, domain_hint, tenant</dt><dd>Optional. The first two are shown to the person marked <em>unverified</em>; all are recorded with the request.</dd>
 </dl>
 
 **Resource-token verification**, every step a `400` when it fails:
