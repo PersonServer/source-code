@@ -290,6 +290,53 @@ admits loopback and plain-HTTP egress so a mock Agent Provider on
 a warning while it is on. Never enable it where anyone else can reach the
 server.
 
+### Single sign-on (OpenID Connect)
+
+An organisation can put its identity provider — Okta, Entra ID, Google
+Workspace, Keycloak — in front of psd's login. Passkeys stay: SSO is
+additive, per person, so a break-glass passkey works when the provider does
+not.
+
+1. Register psd at the provider as a **web application** using the
+   authorization-code flow with PKCE, redirect URI
+   `https://ps.example.com/login/oidc/callback` (psd prints the exact value
+   at startup). Note the client id and secret.
+2. Put the secret in a file readable only by psd, and configure:
+
+   ```json
+   "person_auth": {
+     "method": "oidc",
+     "oidc": {
+       "issuer": "https://acme.okta.com",
+       "client_id": "0oa…",
+       "client_secret_file": "/etc/psd/oidc-secret",
+       "required_claims": { "groups": "psd-users" },
+       "tenant_claim": "org_id"
+     }
+   }
+   ```
+
+   `required_claims` is mandatory — it is who may sign in. `tenant_claim`
+   is what lands in tokens as `tenant`, so resources can apply org policy.
+   Google Workspace needs `"jwks_cross_origin_hosts": ["www.googleapis.com"]`
+   as well. Every field is in the [reference](configuration.md#person_auth--passkeys-and-single-sign-on).
+3. Restart. Startup runs discovery and fetches the provider's keys; a wrong
+   issuer, secret path or unreachable provider fails there. The login page
+   now offers **Sign in with acme.okta.com** above the passkey button.
+
+People who pass `required_claims` get a person on first sign-in
+(`provision: true`); people who already have a passkey account connect
+their provider identity from **Sign-in methods** so both routes lead to
+the same person. Identities are keyed on the provider's `(issuer, sub)`,
+never on email.
+
+**Offboarding is two steps, not one.** Deactivating the person at the
+provider stops their logins. It does not stop the agents already acting for
+them; run `psd person deactivate ID` to revoke every binding, end their
+missions, drop their sessions and refuse further sign-ins (see the
+[CLI](cli.md#person-deactivate-person-activate)). Put it in the runbook.
+There is no SCIM in this release.
+
 ### Optional surfaces
 
 `missions.enabled` advertises `mission_endpoint` and turns on the mission

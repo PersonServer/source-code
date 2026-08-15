@@ -30,6 +30,8 @@ pub struct PersonTokenRequest<'a> {
     /// The mission's `expires_at` when operating under one.
     pub mission_expires_at: Option<u64>,
     pub mission_s256: Option<&'a str>,
+    /// Organisational context to issue as `tenant`; when `None`, the
+    /// person's own tenant (from their identity provider) is used.
     pub tenant: Option<&'a str>,
 }
 
@@ -80,8 +82,16 @@ pub fn person_token(app: &App, req: &PersonTokenRequest) -> Result<IssuedPersonT
     if let Some(m) = req.mission_s256 {
         payload["mission_s256"] = m.into();
     }
-    if let Some(t) = req.tenant {
-        payload["tenant"] = t.into();
+    // `tenant` is the person's organisational context (§Person Token
+    // Structure), never part of the identifier: what the caller says (an
+    // upstream token under call chaining), else what the person's identity
+    // provider told us at their last sign-in.
+    let tenant: Option<String> = match req.tenant {
+        Some(t) => Some(t.to_string()),
+        None => app.store.get_person(req.person_id)?.and_then(|p| p.tenant),
+    };
+    if let Some(t) = &tenant {
+        payload["tenant"] = t.as_str().into();
     }
     let token = jwt::sign(
         tokens::TYP_PERSON,
@@ -100,7 +110,7 @@ pub fn person_token(app: &App, req: &PersonTokenRequest) -> Result<IssuedPersonT
         sub: sub.clone(),
         aud: req.audience.to_string(),
         mission_s256: req.mission_s256.map(|s| s.to_string()),
-        tenant: req.tenant.map(|s| s.to_string()),
+        tenant,
         iat: now,
         exp,
         purge_after: exp + app.cfg.retention_secs(),

@@ -12,6 +12,8 @@ psd serve [--config psd.json]
 psd keygen [--keys psd-keys.json] [--rotate] [--prune-days N]
 psd person add --name "Alice" [--config psd.json] [--ttl 900]
 psd person list [--config psd.json]
+psd person deactivate ID [--config psd.json]
+psd person activate ID [--config psd.json]
 psd invite --person ID [--config psd.json] [--ttl 900]
 psd agents list [--config psd.json]
 psd agents revoke ISS SUB [--config psd.json]
@@ -65,8 +67,24 @@ be able to create a passkey there.
 who lost every device, or who was created before passkeys were possible.
 Each link is single-use and expires.
 
-`person list` prints one line per person: id, display name, passkey count,
+`person list` prints one line per person: id, display name, status
+(`active` / `deactivated`), passkey count, connected SSO identities, tenant,
 created at.
+
+## `person deactivate`, `person activate`
+
+Offboarding, deliberately. With single sign-on, the identity provider
+deactivating a leaver stops their logins — but it does not touch the agents
+acting for them, whose tokens keep being renewed until someone says
+otherwise. `person deactivate ID` says otherwise: it sets the person's
+status to `deactivated`, revokes every active binding (with its consents and
+the outbound auth-token sweep the dashboard's **Revoke** does), ends every
+active mission, drops every session, and refuses every future sign-in —
+passkey or SSO — and every enrolment link. Audited as `person_deactivated
+{via: "cli"}`. Put it in the offboarding runbook next to the IdP step.
+
+`person activate ID` reverses the status only: revoked bindings stay
+revoked, so the person's agents must be approved again.
 
 ## `agents list`, `agents revoke`
 

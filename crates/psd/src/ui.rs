@@ -69,6 +69,9 @@ impl Templates {
         let mut env = Environment::new();
         env.set_auto_escape_callback(|_| minijinja::AutoEscape::Html);
         env.add_filter("datetime", datetime_filter);
+        // Percent-encode a value for use inside a URL query (the login page
+        // carries `next` into the SSO start URL).
+        env.add_filter("urlencode", |v: String| crate::oidc::form_encode(&v));
         let mut overridden = Vec::new();
         for (name, builtin) in BUILTIN_TEMPLATES {
             let source: String = match &cfg.ui.templates_dir {
@@ -477,7 +480,7 @@ mod tests {
         let body = t.render("error.html", context! { title => "X" }).unwrap();
         assert_eq!(body, "CUSTOM X");
         // Others still built in.
-        assert!(t.render("login.html", context! { ps_name => "P", next => "/", issuer => "i", version => "v", person => Value::UNDEFINED, csrf => "" }).unwrap().contains("passkey-get"));
+        assert!(t.render("login.html", context! { ps_name => "P", next => "/", issuer => "i", version => "v", person => Value::UNDEFINED, csrf => "", passkeys_available => true }).unwrap().contains("passkey-get"));
         // A broken override is a startup error, not a runtime surprise.
         std::fs::write(dir.join("login.html"), "{% if %}").unwrap();
         assert!(Templates::load(&cfg).is_err());

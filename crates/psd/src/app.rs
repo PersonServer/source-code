@@ -11,6 +11,7 @@ use crate::config::Config;
 use crate::httpc::EgressPolicy;
 use crate::jwks_cache::JwksCache;
 use crate::keys::KeySet;
+use crate::oidc::OidcRuntime;
 use crate::passkey::Passkeys;
 use crate::pending::PendingNotify;
 use crate::reqctx::ReplayCache;
@@ -35,6 +36,10 @@ pub struct App {
     /// `None` when the issuer host is an IP address (WebAuthn needs a domain
     /// RP ID); the UI then explains instead of failing obscurely.
     pub passkeys: Option<Passkeys>,
+    /// The organisation's OpenID Connect provider, discovered at startup,
+    /// when `person_auth.method = "oidc"`. Only `serve` builds it; the CLI
+    /// paths never need it.
+    pub oidc: Option<OidcRuntime>,
     pub templates: Templates,
     /// Pre-serialized well-known documents. Verification traffic hammers
     /// these; serialize once at startup.
@@ -46,17 +51,21 @@ pub struct App {
 impl App {
     /// Build the application state. Fails fast on an unopenable audit log,
     /// database or template.
-    pub fn new(cfg: Config, keys: KeySet) -> Result<Arc<App>, String> {
-        let audit = Audit::new(cfg.audit_log_file.as_deref())?;
-        let store = Store::open(&cfg.storage.path).map_err(|e| e.to_string())?;
-        App::build(cfg, keys, audit, store)
-    }
-
     pub fn build(
         cfg: Config,
         keys: KeySet,
         audit: Audit,
         store: Store,
+    ) -> Result<Arc<App>, String> {
+        App::build_with(cfg, keys, audit, store, None)
+    }
+
+    pub fn build_with(
+        cfg: Config,
+        keys: KeySet,
+        audit: Audit,
+        store: Store,
+        oidc: Option<OidcRuntime>,
     ) -> Result<Arc<App>, String> {
         let egress = EgressPolicy::from_config(cfg.insecure_dev_mode);
         let jwks_cache = JwksCache::new(egress.clone(), cfg.jwks_cross_origin_hosts.clone());
@@ -77,6 +86,7 @@ impl App {
             pending_notify: PendingNotify::new(),
             code_attempts: CodeAttempts::default(),
             passkeys,
+            oidc,
             templates,
             person_metadata_bytes,
             jwks_bytes,

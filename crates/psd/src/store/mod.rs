@@ -20,7 +20,9 @@ use sha2::{Digest, Sha256};
 use crate::passkey::{NewCredential, StoredCredential};
 
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 1;
+/// v1: the M1–M7 schema. v2: person.status / person.tenant, person_identity,
+/// oidc_login (OIDC person login). Older databases are migrated in `open`.
+const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Clone)]
 pub struct StoreError(pub String);
@@ -58,6 +60,37 @@ pub struct Person {
     pub display_name: String,
     pub user_handle: Vec<u8>,
     pub created_at: u64,
+    /// "active" or "deactivated".
+    pub status: String,
+    /// Organisational context from the identity provider, if any.
+    pub tenant: Option<String>,
+}
+
+impl Person {
+    pub fn is_active(&self) -> bool {
+        self.status == "active"
+    }
+}
+
+/// An identity at an OpenID Connect provider linked to a person.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Identity {
+    pub idp_iss: String,
+    pub idp_sub: String,
+    pub person_id: String,
+    pub email: Option<String>,
+    pub linked_at: u64,
+    pub last_login_at: Option<u64>,
+}
+
+/// One OIDC sign-in attempt, as taken (spent) by the callback.
+#[derive(Debug, Clone)]
+pub struct OidcLogin {
+    pub state_hash: String,
+    pub nonce_hash: String,
+    pub code_verifier: String,
+    pub next: String,
+    pub link_person_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -275,6 +308,15 @@ impl Store {
                 )?;
             }
             Some(v) if v == SCHEMA_VERSION => {}
+            Some(1) => {
+                // v1 → v2: two nullable-or-defaulted columns on person; the
+                // new tables were created by the CREATE IF NOT EXISTS above.
+                conn.execute_batch(
+                    "ALTER TABLE person ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+                     ALTER TABLE person ADD COLUMN tenant TEXT;
+                     UPDATE schema_version SET version = 2;",
+                )?;
+            }
             Some(v) => {
                 return Err(StoreError(format!(
                     "database schema version {v} is not supported by this build (expects \
@@ -305,17 +347,28 @@ impl Store {
 
     // ------------------------------------------------------------- persons
 
+    const PERSON_SELECT: &'static str =
+        "SELECT id, display_name, user_handle, created_at, status, tenant FROM person";
+
     pub fn create_person(&self, display_name: &str) -> SResult<Person> {
         let person = Person {
             id: format!("p-{}", aauth_core::rand_id(16)),
             display_name: display_name.to_string(),
             user_handle: crate::passkey::new_user_handle(),
             created_at: now(),
+            status: "active".into(),
+            tenant: None,
         };
         self.with(|c| {
             c.execute(
-                "INSERT INTO person(id, display_name, user_handle, created_at) VALUES (?1, ?2, ?3, ?4)",
-                params![person.id, person.display_name, person.user_handle, person.created_at as i64],
+                "INSERT INTO person(id, display_name, user_handle, created_at, status) \
+                 VALUES (?1, ?2, ?3, ?4, 'active')",
+                params![
+                    person.id,
+                    person.display_name,
+                    person.user_handle,
+                    person.created_at as i64
+                ],
             )
         })?;
         Ok(person)
@@ -327,13 +380,207 @@ impl Store {
             display_name: r.get(1)?,
             user_handle: r.get(2)?,
             created_at: u(r.get(3)?),
+            status: r.get(4)?,
+            tenant: r.get(5)?,
+        })
+    }
+
+    /// Deactivate or reactivate a person. Returns false if unknown.
+    pub fn set_person_status(&self, id: &str, status: &str) -> SResult<bool> {
+        let n = self.with(|c| {
+            c.execute(
+                "UPDATE person SET status = ?2 WHERE id = ?1",
+                params![id, status],
+            )
+        })?;
+        Ok(n == 1)
+    }
+
+    /// Record (or clear) the person's organisational tenant.
+    pub fn set_person_tenant(&self, id: &str, tenant: Option<&str>) -> SResult<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE person SET tenant = ?2 WHERE id = ?1",
+                params![id, tenant],
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Every session of a person (offboarding: log them out everywhere).
+    pub fn delete_sessions_for_person(&self, person_id: &str) -> SResult<usize> {
+        self.with(|c| {
+            c.execute(
+                "DELETE FROM session WHERE person_id = ?1",
+                params![person_id],
+            )
+        })
+    }
+
+    // ----------------------------------------------------- OIDC identities
+
+    fn row_identity(r: &rusqlite::Row) -> rusqlite::Result<Identity> {
+        Ok(Identity {
+            idp_iss: r.get(0)?,
+            idp_sub: r.get(1)?,
+            person_id: r.get(2)?,
+            email: r.get(3)?,
+            linked_at: u(r.get(4)?),
+            last_login_at: r.get::<_, Option<i64>>(5)?.map(u),
+        })
+    }
+
+    const IDENTITY_SELECT: &'static str = "SELECT idp_iss, idp_sub, person_id, email, \
+                                          linked_at, last_login_at FROM person_identity";
+
+    pub fn identity(&self, idp_iss: &str, idp_sub: &str) -> SResult<Option<Identity>> {
+        self.with(|c| {
+            c.query_row(
+                &format!(
+                    "{} WHERE idp_iss = ?1 AND idp_sub = ?2",
+                    Self::IDENTITY_SELECT
+                ),
+                params![idp_iss, idp_sub],
+                Self::row_identity,
+            )
+            .optional()
+        })
+    }
+
+    pub fn identities_for_person(&self, person_id: &str) -> SResult<Vec<Identity>> {
+        self.with(|c| {
+            let mut st = c.prepare(&format!(
+                "{} WHERE person_id = ?1 ORDER BY linked_at",
+                Self::IDENTITY_SELECT
+            ))?;
+            let rows = st.query_map(params![person_id], Self::row_identity)?;
+            rows.collect()
+        })
+    }
+
+    /// Link an identity to a person. `Ok(false)` when that identity is
+    /// already linked to a *different* person (the PRIMARY KEY holds).
+    pub fn link_identity(
+        &self,
+        person_id: &str,
+        idp_iss: &str,
+        idp_sub: &str,
+        email: Option<&str>,
+    ) -> SResult<bool> {
+        self.with_tx(|tx| {
+            let owner: Option<String> = tx
+                .query_row(
+                    "SELECT person_id FROM person_identity WHERE idp_iss = ?1 AND idp_sub = ?2",
+                    params![idp_iss, idp_sub],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            match owner {
+                Some(o) if o != person_id => Ok(false),
+                Some(_) => Ok(true),
+                None => {
+                    tx.execute(
+                        "INSERT INTO person_identity(idp_iss, idp_sub, person_id, email, linked_at) \
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        params![idp_iss, idp_sub, person_id, email, now() as i64],
+                    )?;
+                    Ok(true)
+                }
+            }
+        })
+    }
+
+    /// Note a sign-in through an identity (and refresh its display email).
+    pub fn touch_identity(&self, idp_iss: &str, idp_sub: &str, email: Option<&str>) -> SResult<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE person_identity SET last_login_at = ?3, email = COALESCE(?4, email) \
+                 WHERE idp_iss = ?1 AND idp_sub = ?2",
+                params![idp_iss, idp_sub, now() as i64, email],
+            )
+        })?;
+        Ok(())
+    }
+
+    // ------------------------------------------------------- OIDC logins
+
+    /// Start a sign-in attempt; returns the plaintext id for the cookie.
+    /// `state` and `nonce` are stored hashed.
+    pub fn create_oidc_login(
+        &self,
+        state: &str,
+        nonce: &str,
+        code_verifier: &str,
+        next: &str,
+        link_person_id: Option<&str>,
+        ttl_secs: u64,
+    ) -> SResult<String> {
+        let id = aauth_core::rand_token(192);
+        let n = now();
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO oidc_login(id_hash, state_hash, nonce_hash, code_verifier, next, \
+                 link_person_id, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    sha256_hex(&id),
+                    sha256_hex(state),
+                    sha256_hex(nonce),
+                    code_verifier,
+                    next,
+                    link_person_id,
+                    n as i64,
+                    (n + ttl_secs) as i64
+                ],
+            )
+        })?;
+        Ok(id)
+    }
+
+    /// Spend a sign-in attempt: returns the row if it was open (unused and
+    /// unexpired) and marks it used in the same transaction, so a callback
+    /// URL is good exactly once whatever happens after.
+    pub fn take_oidc_login(&self, id: &str) -> SResult<Option<OidcLogin>> {
+        let h = sha256_hex(id);
+        self.with_tx(|tx| {
+            let row: Option<OidcLogin> = tx
+                .query_row(
+                    "SELECT state_hash, nonce_hash, code_verifier, next, link_person_id \
+                     FROM oidc_login WHERE id_hash = ?1 AND used_at IS NULL AND expires_at > ?2",
+                    params![h, now() as i64],
+                    |r| {
+                        Ok(OidcLogin {
+                            state_hash: r.get(0)?,
+                            nonce_hash: r.get(1)?,
+                            code_verifier: r.get(2)?,
+                            next: r.get(3)?,
+                            link_person_id: r.get(4)?,
+                        })
+                    },
+                )
+                .optional()?;
+            if row.is_some() {
+                tx.execute(
+                    "UPDATE oidc_login SET used_at = ?2 WHERE id_hash = ?1",
+                    params![h, now() as i64],
+                )?;
+            }
+            Ok(row)
+        })
+    }
+
+    pub fn purge_oidc_logins(&self) -> SResult<usize> {
+        self.with(|c| {
+            c.execute(
+                "DELETE FROM oidc_login WHERE expires_at <= ?1 OR used_at IS NOT NULL",
+                params![now() as i64],
+            )
         })
     }
 
     pub fn get_person(&self, id: &str) -> SResult<Option<Person>> {
         self.with(|c| {
             c.query_row(
-                "SELECT id, display_name, user_handle, created_at FROM person WHERE id = ?1",
+                &format!("{} WHERE id = ?1", Self::PERSON_SELECT),
                 params![id],
                 Self::row_person,
             )
@@ -343,9 +590,7 @@ impl Store {
 
     pub fn list_persons(&self) -> SResult<Vec<Person>> {
         self.with(|c| {
-            let mut st = c.prepare(
-                "SELECT id, display_name, user_handle, created_at FROM person ORDER BY created_at",
-            )?;
+            let mut st = c.prepare(&format!("{} ORDER BY created_at", Self::PERSON_SELECT))?;
             let rows = st.query_map([], Self::row_person)?;
             rows.collect()
         })
@@ -2128,5 +2373,103 @@ mod tests {
         assert_eq!(mine.len(), 1);
         assert_eq!(mine[0].action, "person_token_issued");
         assert_eq!(mine[0].detail["jti"], "x");
+    }
+
+    #[test]
+    fn v1_database_is_migrated_to_v2() {
+        // A v1 database (no person.status / tenant, no identity tables) as
+        // deployed by the first release: opening it must add the columns,
+        // create the tables and bump the version, keeping the rows.
+        let dir = std::env::temp_dir().join(format!("psd-store-mig-{}", aauth_core::rand_id(8)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("v1.db");
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE schema_version (version INTEGER NOT NULL);
+                 INSERT INTO schema_version(version) VALUES (1);
+                 CREATE TABLE person (id TEXT PRIMARY KEY, display_name TEXT NOT NULL,
+                   user_handle BLOB NOT NULL UNIQUE, created_at INTEGER NOT NULL);
+                 INSERT INTO person(id, display_name, user_handle, created_at)
+                   VALUES ('p-old', 'Old Alice', x'01', 1);",
+            )
+            .unwrap();
+        }
+        let s = Store::open(path.to_str().unwrap()).unwrap();
+        let v: i64 = s
+            .with(|c| c.query_row("SELECT version FROM schema_version", [], |r| r.get(0)))
+            .unwrap();
+        assert_eq!(v, 2);
+        let p = s.get_person("p-old").unwrap().unwrap();
+        assert_eq!(p.display_name, "Old Alice");
+        assert!(p.is_active());
+        assert_eq!(p.tenant, None);
+        assert!(s.identity("https://idp", "x").unwrap().is_none());
+        // Reopening a v2 database is a no-op.
+        drop(s);
+        let s = Store::open(path.to_str().unwrap()).unwrap();
+        assert!(s.get_person("p-old").unwrap().is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn identities_link_once_and_status_tenant_round_trip() {
+        let s = store();
+        let a = s.create_person("Alice").unwrap();
+        let b = s.create_person("Bob").unwrap();
+        assert!(s
+            .link_identity(&a.id, "https://idp", "sub-1", Some("alice@acme.example"))
+            .unwrap());
+        // Same identity, same person: fine. Same identity, another person: no.
+        assert!(s
+            .link_identity(&a.id, "https://idp", "sub-1", None)
+            .unwrap());
+        assert!(!s
+            .link_identity(&b.id, "https://idp", "sub-1", None)
+            .unwrap());
+        let id = s.identity("https://idp", "sub-1").unwrap().unwrap();
+        assert_eq!(id.person_id, a.id);
+        assert_eq!(id.email.as_deref(), Some("alice@acme.example"));
+        assert!(id.last_login_at.is_none());
+        s.touch_identity("https://idp", "sub-1", Some("alice.new@acme.example"))
+            .unwrap();
+        let id = s.identity("https://idp", "sub-1").unwrap().unwrap();
+        assert!(id.last_login_at.is_some());
+        assert_eq!(id.email.as_deref(), Some("alice.new@acme.example"));
+        assert_eq!(s.identities_for_person(&a.id).unwrap().len(), 1);
+        assert!(s.identities_for_person(&b.id).unwrap().is_empty());
+        // Status and tenant.
+        s.set_person_tenant(&a.id, Some("acme")).unwrap();
+        assert_eq!(
+            s.get_person(&a.id).unwrap().unwrap().tenant.as_deref(),
+            Some("acme")
+        );
+        assert!(s.set_person_status(&a.id, "deactivated").unwrap());
+        assert!(!s.get_person(&a.id).unwrap().unwrap().is_active());
+        assert!(!s.set_person_status("p-nobody", "deactivated").unwrap());
+        let (sid, _) = s.create_session(&a.id, 600).unwrap();
+        assert_eq!(s.delete_sessions_for_person(&a.id).unwrap(), 1);
+        assert!(s.get_session(&sid).unwrap().is_none());
+    }
+
+    #[test]
+    fn oidc_login_is_spent_once() {
+        let s = store();
+        let id = s
+            .create_oidc_login("st", "nc", "verifier", "/next", None, 600)
+            .unwrap();
+        let row = s.take_oidc_login(&id).unwrap().unwrap();
+        assert_eq!(row.state_hash, sha256_hex("st"));
+        assert_eq!(row.nonce_hash, sha256_hex("nc"));
+        assert_eq!(row.code_verifier, "verifier");
+        assert_eq!(row.next, "/next");
+        assert!(row.link_person_id.is_none());
+        // Second presentation: spent.
+        assert!(s.take_oidc_login(&id).unwrap().is_none());
+        // Unknown and expired: nothing.
+        assert!(s.take_oidc_login("nope").unwrap().is_none());
+        let id2 = s.create_oidc_login("st", "nc", "v", "/", None, 0).unwrap();
+        assert!(s.take_oidc_login(&id2).unwrap().is_none());
+        assert!(s.purge_oidc_logins().unwrap() >= 2);
     }
 }

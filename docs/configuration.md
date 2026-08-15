@@ -39,7 +39,7 @@ editing it.
 | `expected_authority` | *(issuer host)* | The `@authority` (`Host`) inbound signed requests must carry. Set only when a TLS-terminating proxy rewrites `Host` — better to make it preserve `Host`. The check is what makes the mandated `@authority` component prevent cross-host replay, so it is never simply off. Lowercase host, optional `:port`. |
 | `insecure_dev_mode` | `false` | **Development only.** Accepts an `http://` issuer (and ports), allows outbound fetches over `http` and to private/loopback addresses, permits a non-`Secure` session cookie. `serve` warns while it is on. |
 | `max_body_bytes` | `65536` | Largest request body accepted (min 1024). |
-| `jwks_cross_origin_hosts` | `[]` | Bare hostnames admitted as cross-origin `jwks_uri` hosts when verifying foreign tokens (an issuer whose metadata points its JWKS at a CDN). Empty means same-origin JWKS only, per the Signature-Key draft. |
+| `jwks_cross_origin_hosts` | `[]` | Bare hostnames admitted as cross-origin `jwks_uri` hosts when verifying foreign tokens (an issuer whose metadata points its JWKS at a CDN) and for the SSO provider's keys (Google Workspace: `www.googleapis.com`). Empty means same-origin JWKS only, per the Signature-Key draft. |
 | `audit_log_file` | *(unset)* | Append the structured JSON audit events to this file, in addition to stderr. |
 
 ## Token lifetimes and windows
@@ -59,12 +59,40 @@ editing it.
 | `storage.backend` | `sqlite` | The only backend in this build. `postgres` is planned and **rejected** at load, so a deployment cannot believe it is using it. |
 | `storage.path` | `psd.db` | SQLite file. `:memory:` is accepted for tests and throwaway runs (state is lost at exit; the CLI refuses it). psd opens it in WAL mode. |
 
-## `directed_sub` and `person_auth`
+## `directed_sub`
 
 | Field | Default | Meaning |
 |---|---|---|
 | `directed_sub.mode` | `pairwise` | The only mode: `sub` is derived per (person, audience) with the pairwise secret, so two services cannot correlate a person. Any other value is rejected. |
-| `person_auth.method` | `passkey` | The only method in this build. `oidc` (organisation login) is planned and rejected at load. |
+
+## `person_auth` — passkeys, and single sign-on
+
+| Field | Default | Meaning |
+|---|---|---|
+| `person_auth.method` | `passkey` | `passkey`: people sign in with passkeys only. `oidc`: people may **also** sign in through the organisation's OpenID Connect provider configured in `person_auth.oidc`. Additive, per person — existing passkeys keep working, new ones can still be added, enrolment links still work, and the login page shows both. There is deliberately no way to turn passkeys off: that switch's failure mode is silently locking people out, and an operator wants a break-glass passkey for when the provider is down. |
+
+`person_auth.oidc` (required when `method` is `oidc`; psd is an OIDC Relying
+Party using Authorization Code + PKCE):
+
+| Field | Default | Meaning |
+|---|---|---|
+| `oidc.issuer` | *(required)* | The provider's issuer URL, e.g. `https://acme.okta.com`, `https://login.microsoftonline.com/<tenant>/v2.0`, `https://accounts.google.com`, `https://keycloak.example/realms/acme`. `https://`, no trailing slash. Discovery (`/.well-known/openid-configuration`) runs at startup through psd's egress admission and the document's `issuer` must equal this value byte for byte; a typo, an unreachable provider or a wrong secret path fails startup, not the first login. |
+| `oidc.client_id` | *(required)* | The client registered at the provider. Its redirect URI is **`{issuer}/login/oidc/callback`** — psd prints it at startup; register exactly that. |
+| `oidc.client_secret_file` | *(required)* | File holding the client secret (one line). A file for the same reason `keys_file` is: it stays out of the config and out of every debug print. |
+| `oidc.scopes` | `["openid","profile","email"]` | Must include `openid`. |
+| `oidc.required_claims` | *(required, non-empty)* | Who may sign in: ID-token claim path → exact string, trailing-`*` prefix, or an array of those (any of). Array-valued claims such as `groups` match when any element does; an empty array never does. **This is the authorization gate and it is mandatory** — without it every account at the provider could sign in and (with provisioning on) get a person. "Everyone in our domain" is written explicitly: `{"hd": "acme.com"}` for Google Workspace, `{"groups": "psd-users"}` for a group, `{"realm_access.roles": "psd"}` for a Keycloak role. |
+| `oidc.tenant_claim` | *(unset)* | An ID-token claim naming the person's organisation (`org_id`, `tid`, `hd`, …). Its value is stored on the person, refreshed at every SSO sign-in, and issued into every person token as `tenant` (organisational context; never part of the identifier), from where the resource token and auth token carry it — a resource applies org policy without knowing your provider. After an org move, tokens minted before the next sign-in carry the old value until they expire (at most an hour). |
+| `oidc.display_name_claims` | `["name","preferred_username","email"]` | Tried in order for a newly provisioned person's display name. |
+| `oidc.provision` | `true` | Create a person on first sign-in when no person is linked to the identity (just-in-time). `false`: only identities an existing person connected from their sign-in-methods page may sign in. |
+
+Identities are keyed on the provider's `(issuer, sub)`, never on email —
+email is mutable and reassignable, and an offboarded `alice@` handed to a
+new Alice must not inherit the old Alice's agents and consents. Google
+Workspace publishes its keys on `www.googleapis.com`; list that host in
+`jwks_cross_origin_hosts`. Offboarding is a deliberate step —
+[`psd person deactivate`](cli.md#person-deactivate-person-activate) — because
+the provider deactivating a leaver stops their logins but not the agents
+already acting for them.
 
 ## `notify`
 

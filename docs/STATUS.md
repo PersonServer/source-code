@@ -5,7 +5,7 @@ review channel between sessions is lossy. Decisions and their draft citations
 are in [DECISIONS.md](DECISIONS.md); this file is the "what is built, how to
 check it, what is open" companion.
 
-Last updated: 2026-08-15. Build: 111 tests, `cargo clippy --workspace
+Last updated: 2026-08-15. Build: 128 tests, `cargo clippy --workspace
 --all-targets -- -D warnings` clean, `cargo fmt --check` clean. Pushed to
 `github.com/PersonServer/source-code` (main); CI (fmt · clippy · test · helm
 · docker) on every push, `edge` image + chart on main, `release` on `v*`
@@ -25,6 +25,9 @@ records pointed at GitHub Pages to resolve.
 | M6 | ✅ | missions (`missions.enabled`): `POST /mission` propose (`description`, `tools`, `resources`, metadata fetched per resource) → approval screen with lifetime choice → blob (canonical JSON, exact bytes stored, `s256`) + person token per approved resource; `POST /mission/{s256}` `action: update` (appended to the digested log) / `action: completion` (person accepts → `completed`); constant-time `404 mission_not_found` for unknown-or-not-owned (same query, `subtle` compare, identical response; timing test) and `403 mission_terminated` + `mission_status` + `termination_reason` for the owner's ended mission; `mission_s256` guarded on `/person` and at `/token` step 7; every token under a mission capped by `expires_at`; expiry checked on every decision path; End mission (dashboard) → `revoked` + revoke tokens issued under it |
 | M7 | ✅ (mock-tested) | four-party (`federation.enabled`): consent first, then a `jwks_uri`-signed POST to the AS's `auth_token_endpoint` (`resource_token`, `agent_token`, `subagent_token?`, `upstream_token?`); `requirement=claims` answered with the directed `sub`; `interaction`/`approval` forwarded to the agent, whose polls poll the AS; `402` → `403 user_unreachable`; the AS's auth token verified per §Auth Token Delivery and recorded as provided (`iss` = AS). Call chaining: `upstream_token` verified per §Upstream Token Verification, person from a `sub` we issued, intermediary never bound, consent labelled chained, mission inherited from upstream, tenant carried. **No live Access Server exists; both are exercised against mocks only.** An `interaction` claim in a resource token is still refused |
 
+Enterprise SSO (D-66…D-75, reviewed): OIDC person login, additive to
+passkeys; `psd person deactivate` for offboarding; `tenant` in tokens.
+
 Not built (all OPTIONAL, deliberately — see D-58): clarification chat,
 interaction relay endpoint, permission/audit endpoints,
 `mission_control_endpoint`, resource-initiated interaction, Postgres, OIDC
@@ -33,7 +36,7 @@ person auth.
 ## How to check it
 
 ```sh
-cargo test                                          # 111 tests, no network
+cargo test                                          # 128 tests, no network
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 

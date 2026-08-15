@@ -80,5 +80,6 @@ revocation, missions, and four-party federation to an Access Server plus call
 chaining. The last two are exercised against mock servers only — no live
 Access Server exists in the ecosystem yet. Optional surfaces psd does not offer
 (clarification chat, an interaction relay, permission and audit endpoints,
-`mission_control_endpoint`, Postgres, OIDC login) are absent from its metadata,
-which is how the protocol says "not supported".
+`mission_control_endpoint`, Postgres) are absent from its metadata, which is
+how the protocol says "not supported". People sign in with passkeys, or —
+for organisations — through their OpenID Connect provider as well.

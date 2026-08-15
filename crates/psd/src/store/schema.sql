@@ -13,8 +13,47 @@ CREATE TABLE IF NOT EXISTS person (
   display_name  TEXT NOT NULL,
   -- WebAuthn user.id (64 random bytes); what a passkey asserts.
   user_handle   BLOB NOT NULL UNIQUE,
-  created_at    INTEGER NOT NULL
+  created_at    INTEGER NOT NULL,
+  -- 'active' | 'deactivated'. Deactivation is deliberate offboarding: every
+  -- login (passkey or SSO) and enrolment link is refused from then on.
+  status        TEXT NOT NULL DEFAULT 'active',
+  -- Organisational context from the identity provider (`tenant_claim`),
+  -- issued into person tokens as `tenant`; never part of the identifier.
+  tenant        TEXT
 );
+
+-- An identity at an OpenID Connect provider, linked to a person. Keyed on
+-- (issuer, subject) — never on email, which is mutable and reassignable: an
+-- offboarded alice@ handed to a new Alice must not inherit the old Alice's
+-- agents and consents. Email is kept for display only.
+CREATE TABLE IF NOT EXISTS person_identity (
+  idp_iss        TEXT NOT NULL,
+  idp_sub        TEXT NOT NULL,
+  person_id      TEXT NOT NULL REFERENCES person(id),
+  email          TEXT,
+  linked_at      INTEGER NOT NULL,
+  last_login_at  INTEGER,
+  PRIMARY KEY (idp_iss, idp_sub)
+);
+CREATE INDEX IF NOT EXISTS person_identity_person ON person_identity(person_id);
+
+-- One OIDC sign-in attempt: the row a `psd_oidc` cookie names. `state` and
+-- `nonce` are bound here (hashed) and the row is single-use, spent on the
+-- first callback whatever happens after; a login that never comes back
+-- expires. `link_person_id` is set when a signed-in person is connecting an
+-- identity to their existing account rather than signing in.
+CREATE TABLE IF NOT EXISTS oidc_login (
+  id_hash         TEXT PRIMARY KEY,
+  state_hash      TEXT NOT NULL,
+  nonce_hash      TEXT NOT NULL,
+  code_verifier   TEXT NOT NULL,
+  next            TEXT NOT NULL,
+  link_person_id  TEXT REFERENCES person(id),
+  created_at      INTEGER NOT NULL,
+  expires_at      INTEGER NOT NULL,
+  used_at         INTEGER
+);
+CREATE INDEX IF NOT EXISTS oidc_login_expires ON oidc_login(expires_at);
 
 CREATE TABLE IF NOT EXISTS passkey_credential (
   cred_id        BLOB PRIMARY KEY,

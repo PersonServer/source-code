@@ -43,6 +43,7 @@ pub async fn run(listener: TcpListener, app: Arc<App>, shutdown: impl Future<Out
                 // writes that matter, so correctness never depends on this
                 // tick — it only keeps the tables tidy on a quiet server.
                 let _ = app.store.purge_expired_sessions();
+                let _ = app.store.purge_oidc_logins();
                 let _ = app.store.purge_pending(86_400);
                 let _ = app.store.purge_person_token_records();
             }

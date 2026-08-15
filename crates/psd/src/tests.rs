@@ -5112,3 +5112,866 @@ mod federation_tests {
         assert!(body["detail"].as_str().unwrap().contains("revoked"));
     }
 }
+
+// ============================================================ OIDC person login
+mod oidc_tests {
+    use super::flow_support::{pending_and_code, poll, post_person};
+    use super::ui_tests::{call_raw, get, post_form, UI_ISSUER};
+    use super::*;
+    use crate::oidc::OidcRuntime;
+    use p256::ecdsa::signature::Signer as _;
+    use sha2::Digest as _;
+    use std::collections::HashMap;
+    use std::sync::Mutex as StdMutex;
+
+    /// An OpenID Connect provider in a box: discovery, an ES256 JWKS, and a
+    /// token endpoint that checks the client secret, spends the code once,
+    /// and verifies the PKCE verifier against the challenge the authorization
+    /// step recorded. The "browser visit" to the authorization endpoint is
+    /// simulated by [`MockIdp::authorize`], which does what a real IdP does
+    /// after the person authenticates: mint a code bound to the request's
+    /// nonce and code_challenge.
+    struct MockIdp {
+        issuer: String,
+        client_id: String,
+        secret: String,
+        /// code → (nonce, code_challenge)
+        codes: Arc<StdMutex<HashMap<String, (String, String)>>>,
+        /// Claims minted into every ID token (over the standard ones).
+        claims: Arc<StdMutex<serde_json::Value>>,
+        /// Sabotage knobs.
+        nonce_override: Arc<StdMutex<Option<String>>>,
+        kid_override: Arc<StdMutex<Option<String>>>,
+        alg_none: Arc<StdMutex<bool>>,
+        _handle: tokio::task::JoinHandle<()>,
+    }
+
+    fn jwk_for(key: &p256::ecdsa::SigningKey, kid: &str) -> serde_json::Value {
+        let point = key.verifying_key().to_encoded_point(false);
+        serde_json::json!({
+            "kty": "EC", "crv": "P-256", "kid": kid, "alg": "ES256", "use": "sig",
+            "x": aauth_core::b64::encode(point.x().unwrap()),
+            "y": aauth_core::b64::encode(point.y().unwrap()),
+        })
+    }
+
+    fn sign_es256(
+        key: &p256::ecdsa::SigningKey,
+        header: &serde_json::Value,
+        payload: &serde_json::Value,
+    ) -> String {
+        let h = aauth_core::b64::encode(header.to_string().as_bytes());
+        let p = aauth_core::b64::encode(payload.to_string().as_bytes());
+        let input = format!("{h}.{p}");
+        let sig: p256::ecdsa::Signature = key.sign(input.as_bytes());
+        format!("{input}.{}", aauth_core::b64::encode(&sig.to_bytes()))
+    }
+
+    async fn spawn_mock_idp() -> MockIdp {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let issuer = format!("http://127.0.0.1:{port}");
+        let key = p256::ecdsa::SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+        let kid = "idp-key-1".to_string();
+        let client_id = "psd-client".to_string();
+        let secret = "s3cret".to_string();
+        let codes: Arc<StdMutex<HashMap<String, (String, String)>>> = Default::default();
+        let claims = Arc::new(StdMutex::new(serde_json::json!({
+            "sub": "user-1", "email": "alice@acme.example", "name": "Alice Example",
+            "groups": ["everyone", "psd-users"], "org": "acme"
+        })));
+        let nonce_override: Arc<StdMutex<Option<String>>> = Default::default();
+        let kid_override: Arc<StdMutex<Option<String>>> = Default::default();
+        let alg_none = Arc::new(StdMutex::new(false));
+        let jwks_s = serde_json::json!({ "keys": [jwk_for(&key, &kid)] }).to_string();
+        let disc_s = serde_json::json!({
+            "issuer": issuer,
+            "authorization_endpoint": format!("{issuer}/authorize"),
+            "token_endpoint": format!("{issuer}/token"),
+            "jwks_uri": format!("{issuer}/jwks"),
+            "id_token_signing_alg_values_supported": ["ES256"],
+        })
+        .to_string();
+        let st = (
+            issuer.clone(),
+            client_id.clone(),
+            secret.clone(),
+            key.clone(),
+            kid.clone(),
+            codes.clone(),
+            claims.clone(),
+            nonce_override.clone(),
+            kid_override.clone(),
+            alg_none.clone(),
+        );
+        let handle = tokio::spawn(async move {
+            loop {
+                let (stream, _) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                let st = st.clone();
+                let jwks_s = jwks_s.clone();
+                let disc_s = disc_s.clone();
+                tokio::spawn(async move {
+                    let svc = service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                        let st = st.clone();
+                        let jwks_s = jwks_s.clone();
+                        let disc_s = disc_s.clone();
+                        async move {
+                            let (
+                                issuer,
+                                client_id,
+                                secret,
+                                key,
+                                kid,
+                                codes,
+                                claims,
+                                nonce_override,
+                                kid_override,
+                                alg_none,
+                            ) = st;
+                            let path = req.uri().path().to_string();
+                            let method = req.method().clone();
+                            let auth = req
+                                .headers()
+                                .get("authorization")
+                                .and_then(|v| v.to_str().ok())
+                                .map(String::from);
+                            let body = req.into_body().collect().await.unwrap().to_bytes();
+                            let (status, out) = match (method, path.as_str()) {
+                                (Method::GET, "/.well-known/openid-configuration") => (200, disc_s),
+                                (Method::GET, "/jwks") => (200, jwks_s),
+                                (Method::POST, "/token") => {
+                                    let form = crate::ui::parse_form(&body);
+                                    let expected = format!(
+                                        "Basic {}",
+                                        aauth_core::b64::encode_std(
+                                            format!("{client_id}:{secret}").as_bytes()
+                                        )
+                                    );
+                                    if auth.as_deref() != Some(expected.as_str()) {
+                                        (
+                                            401,
+                                            serde_json::json!({"error":"invalid_client"})
+                                                .to_string(),
+                                        )
+                                    } else if form.get("grant_type").map(String::as_str)
+                                        != Some("authorization_code")
+                                    {
+                                        (
+                                            400,
+                                            serde_json::json!({"error":"unsupported_grant_type"})
+                                                .to_string(),
+                                        )
+                                    } else {
+                                        let code = form.get("code").cloned().unwrap_or_default();
+                                        let taken = codes.lock().unwrap().remove(&code);
+                                        match taken {
+                                            None => (
+                                                400,
+                                                serde_json::json!({"error":"invalid_grant"})
+                                                    .to_string(),
+                                            ),
+                                            Some((nonce, challenge)) => {
+                                                let verifier = form
+                                                    .get("code_verifier")
+                                                    .cloned()
+                                                    .unwrap_or_default();
+                                                let got = aauth_core::b64::encode(
+                                                    &sha2::Sha256::digest(verifier.as_bytes()),
+                                                );
+                                                if got != challenge {
+                                                    (400, serde_json::json!({"error":"invalid_grant","error_description":"pkce"}).to_string())
+                                                } else {
+                                                    let now = aauth_core::now_unix();
+                                                    let mut payload =
+                                                        claims.lock().unwrap().clone();
+                                                    payload["iss"] = issuer.clone().into();
+                                                    payload["aud"] = client_id.clone().into();
+                                                    payload["iat"] = now.into();
+                                                    payload["exp"] = (now + 300).into();
+                                                    payload["nonce"] = nonce_override
+                                                        .lock()
+                                                        .unwrap()
+                                                        .clone()
+                                                        .unwrap_or(nonce)
+                                                        .into();
+                                                    let use_kid = kid_override
+                                                        .lock()
+                                                        .unwrap()
+                                                        .clone()
+                                                        .unwrap_or(kid);
+                                                    let id_token = if *alg_none.lock().unwrap() {
+                                                        let h = aauth_core::b64::encode(
+                                                            br#"{"alg":"none","typ":"JWT"}"#,
+                                                        );
+                                                        let p = aauth_core::b64::encode(
+                                                            payload.to_string().as_bytes(),
+                                                        );
+                                                        format!("{h}.{p}.")
+                                                    } else {
+                                                        sign_es256(
+                                                            &key,
+                                                            &serde_json::json!({"alg":"ES256","typ":"JWT","kid":use_kid}),
+                                                            &payload,
+                                                        )
+                                                    };
+                                                    (200, serde_json::json!({
+                                                        "access_token": "at", "token_type": "Bearer", "id_token": id_token
+                                                    }).to_string())
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => (404, "{}".to_string()),
+                            };
+                            Ok::<_, std::convert::Infallible>(
+                                hyper::Response::builder()
+                                    .status(status)
+                                    .header("content-type", "application/json")
+                                    .body(http_body_util::Full::new(hyper::body::Bytes::from(out)))
+                                    .unwrap(),
+                            )
+                        }
+                    });
+                    let _ = http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), svc)
+                        .await;
+                });
+            }
+        });
+        MockIdp {
+            issuer,
+            client_id,
+            secret,
+            codes,
+            claims,
+            nonce_override,
+            kid_override,
+            alg_none,
+            _handle: handle,
+        }
+    }
+
+    impl MockIdp {
+        /// What the IdP does after the person signs in: check the request,
+        /// mint a code bound to its nonce and PKCE challenge, and hand back
+        /// (code, state) for the redirect to the callback.
+        fn authorize(&self, location: &str) -> (String, String) {
+            let (base, query) = location.split_once('?').unwrap();
+            assert_eq!(base, format!("{}/authorize", self.issuer));
+            let q: HashMap<String, String> = query
+                .split('&')
+                .map(|kv| {
+                    let (k, v) = kv.split_once('=').unwrap();
+                    (
+                        k.to_string(),
+                        crate::ui::parse_form(format!("x={v}").as_bytes())
+                            .remove("x")
+                            .unwrap(),
+                    )
+                })
+                .collect();
+            assert_eq!(q["response_type"], "code");
+            assert_eq!(q["client_id"], self.client_id);
+            assert_eq!(
+                q["redirect_uri"],
+                format!("{UI_ISSUER}/login/oidc/callback")
+            );
+            assert!(
+                q["scope"].split(' ').any(|s| s == "openid"),
+                "{}",
+                q["scope"]
+            );
+            assert_eq!(q["code_challenge_method"], "S256");
+            assert!(q["state"].len() >= 32 && q["nonce"].len() >= 32);
+            let code = format!("code-{}", aauth_core::rand_id(12));
+            self.codes.lock().unwrap().insert(
+                code.clone(),
+                (q["nonce"].clone(), q["code_challenge"].clone()),
+            );
+            (code, q["state"].clone())
+        }
+    }
+
+    fn secret_file(secret: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("psd-oidc-secret-{}", aauth_core::rand_id(8)));
+        std::fs::write(&p, format!("{secret}\n")).unwrap();
+        p
+    }
+
+    fn oidc_config(idp: &MockIdp, extra: serde_json::Value) -> Config {
+        let mut oidc = serde_json::json!({
+            "issuer": idp.issuer, "client_id": idp.client_id,
+            "client_secret_file": secret_file(&idp.secret).to_string_lossy(),
+            "required_claims": { "groups": "psd-users" },
+            "tenant_claim": "org",
+        });
+        if let Some(obj) = extra.as_object() {
+            for (k, v) in obj {
+                oidc[k] = v.clone();
+            }
+        }
+        let cfg: Config = serde_json::from_value(serde_json::json!({
+            "issuer": UI_ISSUER,
+            "listen": "127.0.0.1:0",
+            "storage": { "backend": "sqlite", "path": ":memory:" },
+            "insecure_dev_mode": true,
+            "metadata": { "name": "Test PS" },
+            "person_auth": { "method": "oidc", "oidc": oidc },
+        }))
+        .unwrap();
+        cfg.validate().unwrap();
+        cfg
+    }
+
+    async fn oidc_app(idp: &MockIdp, extra: serde_json::Value) -> Arc<App> {
+        let cfg = oidc_config(idp, extra);
+        let egress = crate::httpc::EgressPolicy::from_config(true);
+        let rt = OidcRuntime::discover(&cfg, &egress)
+            .await
+            .expect("discovery");
+        let store = crate::store::Store::open(":memory:").unwrap();
+        App::build_with(cfg, KeySet::generate(), Audit::quiet(), store, Some(rt)).unwrap()
+    }
+
+    /// A GET with arbitrary cookies (name, value).
+    fn get_with_cookies(path: &str, cookies: &[(&str, &str)]) -> ReqCtx {
+        let mut ctx = get(path, None);
+        if !cookies.is_empty() {
+            let c = cookies
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            ctx.headers.push(("cookie".into(), c));
+        }
+        ctx
+    }
+
+    fn cookie_named(headers: &hyper::HeaderMap, name: &str) -> Option<String> {
+        headers.get_all("set-cookie").iter().find_map(|v| {
+            let s = v.to_str().ok()?;
+            let first = s.split(';').next()?;
+            first.strip_prefix(&format!("{name}=")).map(String::from)
+        })
+    }
+
+    fn set_cookie_line(headers: &hyper::HeaderMap, name: &str) -> Option<String> {
+        headers.get_all("set-cookie").iter().find_map(|v| {
+            let s = v.to_str().ok()?;
+            s.starts_with(&format!("{name}=")).then(|| s.to_string())
+        })
+    }
+
+    /// Start a sign-in: returns (authorization URL, psd_oidc cookie value).
+    async fn start(app: &Arc<App>, path: &str) -> (String, String) {
+        let (status, body, headers) =
+            call_raw(app, Method::GET, "/login/oidc", get(path, None)).await;
+        assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+        let loc = hdr(&headers, "location").unwrap().to_string();
+        let line = set_cookie_line(&headers, "psd_oidc").expect("psd_oidc cookie");
+        assert!(
+            line.contains("HttpOnly")
+                && line.contains("SameSite=Lax")
+                && line.contains("Path=/login/oidc"),
+            "{line}"
+        );
+        assert!(!line.contains("Secure"), "http issuer in dev: {line}");
+        let cookie = cookie_named(&headers, "psd_oidc").unwrap();
+        (loc, cookie)
+    }
+
+    async fn callback(
+        app: &Arc<App>,
+        code: &str,
+        state: &str,
+        oidc_cookie: Option<&str>,
+        session: Option<&str>,
+    ) -> (StatusCode, String, hyper::HeaderMap) {
+        let path = format!(
+            "/login/oidc/callback?code={}&state={}",
+            crate::oidc::form_encode(code),
+            crate::oidc::form_encode(state)
+        );
+        let mut cookies: Vec<(&str, &str)> = Vec::new();
+        if let Some(c) = oidc_cookie {
+            cookies.push(("psd_oidc", c));
+        }
+        if let Some(s) = session {
+            cookies.push((crate::ui::SESSION_COOKIE, s));
+        }
+        call_raw(
+            app,
+            Method::GET,
+            "/login/oidc/callback",
+            get_with_cookies(&path, &cookies),
+        )
+        .await
+    }
+
+    fn actions(app: &Arc<App>, person: Option<&str>) -> Vec<(String, serde_json::Value)> {
+        app.store
+            .recent_audit(person, 50)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.action, r.detail))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn discovery_checks_the_issuer_and_the_secret_file() {
+        let idp = spawn_mock_idp().await;
+        let egress = crate::httpc::EgressPolicy::from_config(true);
+        // Configured issuer that is not what the document declares.
+        let mut cfg = oidc_config(&idp, serde_json::json!({}));
+        cfg.person_auth.oidc.as_mut().unwrap().issuer = format!("{}/tenant", idp.issuer);
+        let err = OidcRuntime::discover(&cfg, &egress).await.unwrap_err();
+        assert!(err.contains("discovery"), "{err}");
+        // Missing secret file.
+        let mut cfg = oidc_config(&idp, serde_json::json!({}));
+        cfg.person_auth.oidc.as_mut().unwrap().client_secret_file =
+            "/nonexistent/psd-secret".into();
+        let err = OidcRuntime::discover(&cfg, &egress).await.unwrap_err();
+        assert!(err.contains("client_secret_file"), "{err}");
+        // Good: endpoints taken from the document, redirect_uri fixed.
+        let cfg = oidc_config(&idp, serde_json::json!({}));
+        let rt = OidcRuntime::discover(&cfg, &egress).await.unwrap();
+        assert_eq!(rt.token_endpoint, format!("{}/token", idp.issuer));
+        assert_eq!(rt.redirect_uri, format!("{UI_ISSUER}/login/oidc/callback"));
+        assert!(!format!("{rt:?}").contains("s3cret"));
+    }
+
+    #[tokio::test]
+    async fn sso_sign_in_provisions_links_and_issues_tenant() {
+        let idp = spawn_mock_idp().await;
+        let app = oidc_app(&idp, serde_json::json!({})).await;
+        // The login page offers both.
+        let (status, page, _) = call_raw(&app, Method::GET, "/login", get("/login", None)).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        assert!(
+            page.contains("/login/oidc?next=") && page.contains("passkey-get"),
+            "{page}"
+        );
+
+        let (loc, cookie) = start(&app, "/login/oidc?next=/activity").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, body, headers) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+        assert_eq!(hdr(&headers, "location"), Some("/activity"));
+        let sid = cookie_named(&headers, crate::ui::SESSION_COOKIE).expect("session cookie");
+        // The oidc cookie is cleared.
+        assert!(set_cookie_line(&headers, "psd_oidc")
+            .unwrap()
+            .contains("Max-Age=0"));
+
+        // Provisioned just in time, keyed on (iss, sub), display name from `name`.
+        let persons = app.store.list_persons().unwrap();
+        assert_eq!(persons.len(), 1);
+        let p = &persons[0];
+        assert_eq!(p.display_name, "Alice Example");
+        assert_eq!(p.tenant.as_deref(), Some("acme"));
+        let id = app.store.identity(&idp.issuer, "user-1").unwrap().unwrap();
+        assert_eq!(id.person_id, p.id);
+        assert_eq!(id.email.as_deref(), Some("alice@acme.example"));
+        assert!(id.last_login_at.is_some());
+        // The session works and the audit says how they got in.
+        let (status, dash, _) = call_raw(&app, Method::GET, "/", get("/", Some(&sid))).await;
+        assert_eq!(status, StatusCode::OK, "{dash}");
+        let acts = actions(&app, Some(&p.id));
+        assert!(
+            acts.iter().any(|(a, d)| a == "signed_in"
+                && d["method"] == "oidc"
+                && d["idp_sub"] == "user-1"),
+            "{acts:?}"
+        );
+        assert!(
+            acts.iter()
+                .any(|(a, d)| a == "person_provisioned" && d["via"] == "oidc"),
+            "{acts:?}"
+        );
+        // Sign-in methods page shows the linked identity, no connect button.
+        let (status, page, _) =
+            call_raw(&app, Method::GET, "/passkeys", get("/passkeys", Some(&sid))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            page.contains("alice@acme.example") && !page.contains("/passkeys/oidc/link"),
+            "{page}"
+        );
+
+        // Second sign-in: same person, no new row; email refreshed.
+        idp.claims.lock().unwrap()["email"] = "alice.new@acme.example".into();
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, _, headers) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+        assert_eq!(hdr(&headers, "location"), Some("/"));
+        assert_eq!(app.store.list_persons().unwrap().len(), 1);
+        assert_eq!(
+            app.store
+                .identity(&idp.issuer, "user-1")
+                .unwrap()
+                .unwrap()
+                .email
+                .as_deref(),
+            Some("alice.new@acme.example")
+        );
+
+        // The tenant lands in person tokens the person's agents obtain.
+        let agent = new_agent();
+        let issued = crate::issue::person_token(
+            &app,
+            &crate::issue::PersonTokenRequest {
+                person_id: &p.id,
+                agent_iss: "https://ap.example",
+                agent_sub: "aauth:a@ap.example",
+                cnf_jwk: &agent.jwk,
+                audience: "https://calendar.example",
+                agent_token_exp: aauth_core::now_unix() + 600,
+                mission_expires_at: None,
+                mission_s256: None,
+                tenant: None,
+            },
+        )
+        .unwrap();
+        let payload = jwt::decode(&issued.token).unwrap().payload;
+        assert_eq!(payload["tenant"], "acme");
+        assert_eq!(
+            app.store
+                .person_token_record(&issued.jti)
+                .unwrap()
+                .unwrap()
+                .tenant
+                .as_deref(),
+            Some("acme")
+        );
+        // An org move is reflected at the next sign-in.
+        idp.claims.lock().unwrap()["org"] = "acme-emea".into();
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(
+            app.store
+                .get_person(&p.id)
+                .unwrap()
+                .unwrap()
+                .tenant
+                .as_deref(),
+            Some("acme-emea")
+        );
+    }
+
+    #[tokio::test]
+    async fn callback_binding_state_cookie_and_single_use() {
+        let idp = spawn_mock_idp().await;
+        let app = oidc_app(&idp, serde_json::json!({})).await;
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        // No cookie: the attempt is not this browser's.
+        let (status, page, _) = callback(&app, &code, &state, None, None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{page}");
+        assert!(page.contains("Sign-in attempt not found"));
+        // Wrong state with the right cookie: refused, and the row is spent.
+        let (status, page, _) = callback(&app, &code, "not-the-state", Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{page}");
+        assert!(page.contains("does not match"));
+        let (status, page, _) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{page}");
+        assert!(
+            page.contains("Sign-in attempt not found"),
+            "spent on first presentation"
+        );
+        assert!(app.store.list_persons().unwrap().is_empty());
+
+        // The lure: attacker starts an attempt, gets a code for *their*
+        // identity, and sends the victim (who has an attempt of their own
+        // open) to the callback URL. The victim's cookie names the victim's
+        // row; the attacker's state does not match it.
+        let (attacker_loc, _attacker_cookie) = start(&app, "/login/oidc").await;
+        let (a_code, a_state) = idp.authorize(&attacker_loc);
+        let (_victim_loc, victim_cookie) = start(&app, "/login/oidc").await;
+        let (status, _, headers) =
+            callback(&app, &a_code, &a_state, Some(&victim_cookie), None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(cookie_named(&headers, crate::ui::SESSION_COOKIE).is_none());
+        assert!(app.store.list_persons().unwrap().is_empty());
+
+        // A completed sign-in cannot be replayed: same code+state again.
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, _, _) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+        let (status, _, headers) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(cookie_named(&headers, crate::ui::SESSION_COOKIE).is_none());
+        // Provider error → shown, audited, nothing created.
+        let (_loc, cookie) = start(&app, "/login/oidc").await;
+        let path =
+            "/login/oidc/callback?error=access_denied&error_description=user%20cancelled&state=x";
+        let (status, page, _) = call_raw(
+            &app,
+            Method::GET,
+            "/login/oidc/callback",
+            get_with_cookies(path, &[("psd_oidc", &cookie)]),
+        )
+        .await;
+        // state does not match → refused before the error is even read; the
+        // error path is reached only with the right state:
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{page}");
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (_code, state) = idp.authorize(&loc);
+        let path = format!("/login/oidc/callback?error=access_denied&state={state}");
+        let (status, page, _) = call_raw(
+            &app,
+            Method::GET,
+            "/login/oidc/callback",
+            get_with_cookies(&path, &[("psd_oidc", &cookie)]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{page}");
+        assert!(page.contains("access_denied"));
+    }
+
+    #[tokio::test]
+    async fn id_token_must_carry_this_attempts_nonce_and_a_known_key() {
+        let idp = spawn_mock_idp().await;
+        let app = oidc_app(&idp, serde_json::json!({})).await;
+        // Nonce from another attempt.
+        *idp.nonce_override.lock().unwrap() = Some("some-other-nonce".into());
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, page, _) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{page}");
+        assert!(page.contains("could not be verified"));
+        assert!(app.store.list_persons().unwrap().is_empty());
+        *idp.nonce_override.lock().unwrap() = None;
+        // alg=none.
+        *idp.alg_none.lock().unwrap() = true;
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, _, _) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        *idp.alg_none.lock().unwrap() = false;
+        // A kid the provider does not publish (its keys were fetched at
+        // startup, within the floor, so that set is authoritative).
+        *idp.kid_override.lock().unwrap() = Some("rotated-away".into());
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, page, _) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{page}");
+        *idp.kid_override.lock().unwrap() = None;
+        assert!(app.store.list_persons().unwrap().is_empty());
+        // Sanity: the honest path still works afterwards.
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, _, _) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+    }
+
+    #[tokio::test]
+    async fn required_claims_gate_and_provisioning_switch() {
+        let idp = spawn_mock_idp().await;
+        let app = oidc_app(&idp, serde_json::json!({})).await;
+        idp.claims.lock().unwrap()["groups"] = serde_json::json!(["everyone"]);
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, page, headers) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{page}");
+        assert!(page.contains("not permitted"));
+        assert!(cookie_named(&headers, crate::ui::SESSION_COOKIE).is_none());
+        assert!(
+            app.store.list_persons().unwrap().is_empty(),
+            "nothing provisioned"
+        );
+        assert!(app.store.identity(&idp.issuer, "user-1").unwrap().is_none());
+        // An empty groups array never satisfies the gate.
+        idp.claims.lock().unwrap()["groups"] = serde_json::json!([]);
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, _, _) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        idp.claims.lock().unwrap()["groups"] = serde_json::json!(["psd-users"]);
+
+        // provision: false — an unknown identity is refused even past the gate.
+        let app2 = oidc_app(&idp, serde_json::json!({ "provision": false })).await;
+        let (loc, cookie) = start(&app2, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, page, _) = callback(&app2, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{page}");
+        assert!(page.contains("No account for this identity"));
+        assert!(app2.store.list_persons().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn passkey_person_connects_sso_and_deactivation_ends_everything() {
+        let idp = spawn_mock_idp().await;
+        let app = oidc_app(&idp, serde_json::json!({})).await;
+        // A passkey person with a session (created directly; the passkey
+        // ceremony is covered elsewhere).
+        let alice = app.store.create_person("Alice").unwrap();
+        let (sid, csrf) = app.store.create_session(&alice.id, 3600).unwrap();
+        // The sign-in-methods page offers to connect.
+        let (status, page, _) =
+            call_raw(&app, Method::GET, "/passkeys", get("/passkeys", Some(&sid))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(page.contains("/passkeys/oidc/link"), "{page}");
+        // Linking is a CSRF-protected POST.
+        let (status, _, _) = call_raw(
+            &app,
+            Method::POST,
+            "/passkeys/oidc/link",
+            post_form("/passkeys/oidc/link", &[], Some(&sid)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "no csrf");
+        let (status, _, headers) = call_raw(
+            &app,
+            Method::POST,
+            "/passkeys/oidc/link",
+            post_form("/passkeys/oidc/link", &[("csrf", &csrf)], Some(&sid)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+        let loc = hdr(&headers, "location").unwrap().to_string();
+        let cookie = cookie_named(&headers, "psd_oidc").unwrap();
+        let (code, state) = idp.authorize(&loc);
+        let (status, _, headers) = callback(&app, &code, &state, Some(&cookie), Some(&sid)).await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+        assert_eq!(hdr(&headers, "location"), Some("/passkeys"));
+        assert!(
+            cookie_named(&headers, crate::ui::SESSION_COOKIE).is_none(),
+            "already signed in"
+        );
+        let id = app.store.identity(&idp.issuer, "user-1").unwrap().unwrap();
+        assert_eq!(id.person_id, alice.id);
+        assert_eq!(
+            app.store.list_persons().unwrap().len(),
+            1,
+            "linked, not provisioned"
+        );
+        assert_eq!(
+            app.store
+                .get_person(&alice.id)
+                .unwrap()
+                .unwrap()
+                .tenant
+                .as_deref(),
+            Some("acme")
+        );
+        // The identity now signs Alice in.
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, _, headers) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+        let sid2 = cookie_named(&headers, crate::ui::SESSION_COOKIE).unwrap();
+        assert_eq!(
+            app.store.get_session(&sid2).unwrap().unwrap().person_id,
+            alice.id
+        );
+        // Another person cannot connect the same identity.
+        let bob = app.store.create_person("Bob").unwrap();
+        let (bsid, bcsrf) = app.store.create_session(&bob.id, 3600).unwrap();
+        let (_, _, headers) = call_raw(
+            &app,
+            Method::POST,
+            "/passkeys/oidc/link",
+            post_form("/passkeys/oidc/link", &[("csrf", &bcsrf)], Some(&bsid)),
+        )
+        .await;
+        let loc = hdr(&headers, "location").unwrap().to_string();
+        let cookie = cookie_named(&headers, "psd_oidc").unwrap();
+        let (code, state) = idp.authorize(&loc);
+        let (status, page, _) = callback(&app, &code, &state, Some(&cookie), Some(&bsid)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{page}");
+        assert_eq!(
+            app.store
+                .identity(&idp.issuer, "user-1")
+                .unwrap()
+                .unwrap()
+                .person_id,
+            alice.id
+        );
+
+        // Deactivation: sessions gone, logins refused (SSO and passkey-side).
+        app.store
+            .set_person_status(&alice.id, "deactivated")
+            .unwrap();
+        app.store.delete_sessions_for_person(&alice.id).unwrap();
+        let (status, _, headers) = call_raw(&app, Method::GET, "/", get("/", Some(&sid2))).await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+        assert!(hdr(&headers, "location").unwrap().starts_with("/login"));
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (status, page, headers) = callback(&app, &code, &state, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{page}");
+        assert!(page.contains("deactivated"));
+        assert!(cookie_named(&headers, crate::ui::SESSION_COOKIE).is_none());
+        // Enrolment links for a deactivated person are dead too.
+        let token = app.store.create_enrolment(&alice.id, 600).unwrap();
+        let (status, _, _) = call_raw(
+            &app,
+            Method::GET,
+            &format!("/enrol/{token}"),
+            get(&format!("/enrol/{token}"), None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn sso_session_does_not_decide_consent() {
+        // Authentication is not consent: an SSO session shortens the walk to
+        // the button; it never presses it.
+        let idp = spawn_mock_idp().await;
+        let app = oidc_app(&idp, serde_json::json!({})).await;
+        let (loc, cookie) = start(&app, "/login/oidc").await;
+        let (code, state) = idp.authorize(&loc);
+        let (_, _, headers) = callback(&app, &code, &state, Some(&cookie), None).await;
+        let sid = cookie_named(&headers, crate::ui::SESSION_COOKIE).unwrap();
+        // An agent asks; the request is deferred.
+        let ap = spawn_mock_ap("ap-key-1", MockApOpts::default()).await;
+        let agent = new_agent();
+        let (status, _, headers) =
+            post_person(&app, &ap, &agent, "agent-1", "https://calendar.example").await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let (pending_id, code) = pending_and_code(&headers);
+        // Opening the consent screen with the SSO session decides nothing.
+        let (status, _, headers) = call_raw(
+            &app,
+            Method::GET,
+            "/consent",
+            get(&format!("/consent?code={code}"), Some(&sid)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+        let loc = hdr(&headers, "location").unwrap().to_string();
+        let (status, page, _) = call_raw(&app, Method::GET, &loc, get(&loc, Some(&sid))).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        assert!(page.contains("Allow") && page.contains("csrf"), "{page}");
+        let (status, _, _) = poll(&app, &ap, &agent, "agent-1", &pending_id).await;
+        assert_eq!(
+            status,
+            StatusCode::ACCEPTED,
+            "still pending after the page was viewed"
+        );
+        assert!(app.store.pending(&pending_id).unwrap().unwrap().is_open());
+        // Only the explicit, CSRF-carrying POST decides.
+        let csrf = app.store.get_session(&sid).unwrap().unwrap().csrf;
+        let (status, page, _) = call_raw(
+            &app,
+            Method::POST,
+            &loc,
+            post_form(&loc, &[("csrf", &csrf), ("action", "approve")], Some(&sid)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        let (status, body, _) = poll(&app, &ap, &agent, "agent-1", &pending_id).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let payload = jwt::decode(body["person_token"].as_str().unwrap())
+            .unwrap()
+            .payload;
+        assert_eq!(payload["tenant"], "acme");
+    }
+}

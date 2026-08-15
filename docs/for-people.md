@@ -31,8 +31,22 @@ raw addresses. If the page says it cannot create one, tell whoever runs it.
 </div>
 
 Once enrolled you land on your dashboard. Add a second passkey — another
-device, a hardware key — from **Passkeys → Add a passkey** so that losing one
-device does not lock you out.
+device, a hardware key — from **Sign-in methods → Add a passkey** so that
+losing one device does not lock you out.
+
+### Signing in with your organisation's account
+
+If your Person Server is run by your organisation, the sign-in page may
+offer **Sign in with \<your provider\>** — Okta, Microsoft, Google, or the
+like — above the passkey button. Choosing it sends you to the provider you
+already use at work; when you come back you are signed in here, and the
+first time this also creates your account (your name comes from the
+provider). Nothing about *agents* changes: signing in is not agreeing to
+anything, and every consent screen still asks you.
+
+If you already had an account with a passkey, connect the provider from
+**Sign-in methods → Connect \<provider\>** so that both ways in lead to the
+same you. Keep at least one passkey: it works when the provider does not.
 
 ## When an agent asks
 
@@ -134,8 +148,9 @@ issued, every request denied, every revocation, with the time and the agent.
 If a service refused an access that you had allowed, it appears here as the
 service's decision, so you know where to look.
 
-**Passkeys** lists your credentials with when each was last used, and lets
-you add one.
+**Sign-in methods** lists your passkeys with when each was last used and
+lets you add one; when your organisation runs single sign-on it also shows
+the provider account connected to you.
 
 **Have a code from an agent?** — the box at the bottom, for when an agent
 gave you a code without a link.

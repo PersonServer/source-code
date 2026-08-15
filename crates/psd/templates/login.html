@@ -3,15 +3,25 @@
 {% block content %}
 <section class="card narrow">
   <h1>Sign in</h1>
+  {% if sso %}
+  <p>Sign in with your organisation's account at <strong>{{ sso.provider }}</strong>.</p>
+  <p><a class="button primary" href="/login/oidc?next={{ next | urlencode }}">Sign in with {{ sso.provider }}</a></p>
+  {% if passkeys_available %}
+  <p class="muted">Or use a passkey you registered with <strong>{{ ps_name }}</strong>:</p>
+  {% endif %}
+  {% else %}
   <p>Use the passkey you registered with <strong>{{ ps_name }}</strong>.</p>
+  {% endif %}
+  {% if passkeys_available %}
   <p>
-    <button id="passkey-get" class="primary"
+    <button id="passkey-get" class="{% if sso %}{% else %}primary{% endif %}"
             data-options="/login/options"
             data-finish="/login/finish"
             data-next="{{ next }}">Sign in with a passkey</button>
   </p>
   <p id="passkey-status" class="status" aria-live="polite"></p>
   <noscript><p class="warn">Signing in with a passkey needs JavaScript (the WebAuthn API is only reachable from script).</p></noscript>
+  {% endif %}
 </section>
-<script src="/static/passkey.js"></script>
+{% if passkeys_available %}<script src="/static/passkey.js"></script>{% endif %}
 {% endblock %}

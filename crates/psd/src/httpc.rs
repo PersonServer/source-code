@@ -269,7 +269,13 @@ where
         .header("host", authority_header(parsed))
         .header("accept", "application/json")
         .header("user-agent", concat!("psd/", env!("CARGO_PKG_VERSION")));
-    if body.is_some() {
+    // JSON unless the caller says otherwise (a form-encoded token request,
+    // for instance) — a second content-type header would be appended, not
+    // replaced, so the default is only applied when none was given.
+    let caller_ct = headers
+        .iter()
+        .any(|(n, _)| n.eq_ignore_ascii_case("content-type"));
+    if body.is_some() && !caller_ct {
         req = req.header("content-type", "application/json");
     }
     for (name, value) in headers {

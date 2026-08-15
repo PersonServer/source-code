@@ -42,6 +42,9 @@ fn base(app: &App, login: Option<&Login>) -> Value {
         version => env!("CARGO_PKG_VERSION"),
         person => login.map(|l| context! { id => l.person.id.clone(), display_name => l.person.display_name.clone() }),
         csrf => login.map(|l| l.session.csrf.clone()).unwrap_or_default(),
+        sso => app.oidc.as_ref().map(|o| context! {
+            provider => aauth_core::ident::host_of(&o.cfg.issuer).unwrap_or_else(|| o.cfg.issuer.clone()),
+        }),
     }
 }
 
@@ -56,6 +59,11 @@ pub fn current_login(ctx: &ReqCtx, app: &App) -> Result<Option<Login>, ApiError>
     let Some(person) = app.store.get_person(&session.person_id)? else {
         return Ok(None);
     };
+    // Offboarded: the session may still exist for a moment, but it grants
+    // nothing.
+    if !person.is_active() {
+        return Ok(None);
+    }
     Ok(Some(Login {
         sid,
         session,
@@ -157,7 +165,7 @@ fn webauthn_username(display_name: &str, fallback: &str) -> String {
 
 pub async fn enrol_page(ctx: &ReqCtx, app: &Arc<App>, token: &str) -> Result<Resp, ApiError> {
     let person = match app.store.peek_enrolment(token)? {
-        Some(pid) => app.store.get_person(&pid)?,
+        Some(pid) => app.store.get_person(&pid)?.filter(|p| p.is_active()),
         None => None,
     };
     let Some(person) = person else {
@@ -194,6 +202,7 @@ pub async fn enrol_options(_ctx: &ReqCtx, app: &Arc<App>, token: &str) -> Result
     let person = app
         .store
         .get_person(&pid)?
+        .filter(|p| p.is_active())
         .ok_or_else(|| ApiError::not_found("invalid_enrolment", "enrolment link is not valid"))?;
     registration_options(app, &person)
 }
@@ -224,6 +233,7 @@ pub async fn enrol_finish(ctx: &ReqCtx, app: &Arc<App>, token: &str) -> Result<R
     let person = app
         .store
         .get_person(&pid)?
+        .filter(|p| p.is_active())
         .ok_or_else(|| ApiError::not_found("invalid_enrolment", "enrolment link is not valid"))?;
     let cred = passkeys(app)?
         .finish_registration(&ctx.body)
@@ -275,12 +285,14 @@ pub async fn login_page(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> 
         return Ok(ui::redirect(&next));
     }
     if let Err(e) = passkeys(app) {
-        return Ok(page_err(app, None, e));
+        if app.oidc.is_none() {
+            return Ok(page_err(app, None, e));
+        }
     }
     render(
         app,
         "login.html",
-        context! { ..base(app, None), ..context! { next } },
+        context! { ..base(app, None), ..context! { next, passkeys_available => app.passkeys.is_some() } },
     )
 }
 
@@ -317,6 +329,20 @@ pub async fn login_finish(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError
             "unknown person",
         )
     })?;
+    if !person.is_active() {
+        app.record(
+            Some(&person.id),
+            "person",
+            "sign_in_refused",
+            None,
+            serde_json::json!({ "method": "passkey", "reason": "deactivated" }),
+        );
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "authentication_failed",
+            "this account has been deactivated",
+        ));
+    }
     store.touch_credential(&outcome.cred_id, outcome.updated_dynamic_state.as_deref())?;
     let (sid, _csrf) = store.create_session(&person.id, app.cfg.ui.session_ttl_secs)?;
     app.record(
@@ -324,7 +350,7 @@ pub async fn login_finish(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError
         "person",
         "signed_in",
         None,
-        serde_json::json!({ "cred_id": aauth_core::b64::encode(&outcome.cred_id) }),
+        serde_json::json!({ "method": "passkey", "cred_id": aauth_core::b64::encode(&outcome.cred_id) }),
     );
     let resp = json_ok(&serde_json::json!({ "redirect": next }));
     Ok(ui::with_cookie(
@@ -538,11 +564,367 @@ pub async fn passkeys_page(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiErro
             }
         })
         .collect();
+    let identities: Vec<Value> = app
+        .store
+        .identities_for_person(&login.person.id)?
+        .into_iter()
+        .map(|i| {
+            context! {
+                provider => aauth_core::ident::host_of(&i.idp_iss).unwrap_or(i.idp_iss.clone()),
+                email => i.email,
+                linked_at => i.linked_at,
+                last_login_at => i.last_login_at,
+            }
+        })
+        .collect();
     render(
         app,
         "passkeys.html",
-        context! { ..base(app, Some(&login)), ..context! { credentials } },
+        context! { ..base(app, Some(&login)), ..context! { credentials, identities } },
     )
+}
+
+// ------------------------------------------------------- OpenID Connect login
+
+/// The rows/cookie side of the OIDC flow. What is bound where:
+///
+/// - `psd_oidc` cookie → one `oidc_login` row (by hash), scoped to
+///   `/login/oidc`, ten minutes, single use.
+/// - `state` (in the callback URL) → the row's `state_hash`: the browser that
+///   comes back must be the one that left, so a callback URL lured from
+///   another attempt fails.
+/// - `nonce` (in the ID token) → the row's `nonce_hash`: the token must be
+///   the one this attempt asked for.
+///
+/// The row is spent before anything can fail, so a callback URL is good
+/// exactly once whatever happens after. None of this touches consent.
+const OIDC_COOKIE: &str = "psd_oidc";
+
+fn oidc_cookie(cfg: &crate::config::Config, value: &str, max_age: u64) -> String {
+    let secure = if cfg.issuer.starts_with("https://") {
+        "; Secure"
+    } else {
+        ""
+    };
+    format!(
+        "{OIDC_COOKIE}={value}; Path=/login/oidc; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure}"
+    )
+}
+
+fn oidc_cookie_value(ctx: &ReqCtx) -> Option<String> {
+    for (name, value) in &ctx.headers {
+        if name != "cookie" {
+            continue;
+        }
+        for part in value.split(';') {
+            if let Some(v) = part.trim().strip_prefix(&format!("{OIDC_COOKIE}=")) {
+                if !v.is_empty() {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn oidc(app: &App) -> Result<&crate::oidc::OidcRuntime, ApiError> {
+    app.oidc.as_ref().ok_or_else(|| {
+        ApiError::not_found(
+            "not_found",
+            "single sign-on is not enabled on this person server",
+        )
+    })
+}
+
+/// Begin a sign-in (or, with a session and `link`, connect this identity
+/// provider to the signed-in person). Creates the row, sets the cookie,
+/// sends the browser to the provider.
+fn oidc_begin(app: &Arc<App>, next: &str, link_person_id: Option<&str>) -> Result<Resp, ApiError> {
+    let rt = oidc(app)?;
+    let state = aauth_core::rand_token(192);
+    let nonce = aauth_core::rand_token(192);
+    let (verifier, challenge) = crate::oidc::pkce_pair();
+    let id = app.store.create_oidc_login(
+        &state,
+        &nonce,
+        &verifier,
+        next,
+        link_person_id,
+        crate::oidc::LOGIN_TTL_SECS,
+    )?;
+    let url = rt.authorization_url(&state, &nonce, &challenge);
+    Ok(ui::with_cookie(
+        ui::redirect(&url),
+        oidc_cookie(&app.cfg, &id, crate::oidc::LOGIN_TTL_SECS),
+    ))
+}
+
+/// `GET /login/oidc?next=` — sign in through the organisation's provider.
+pub async fn oidc_start(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
+    if let Err(e) = oidc(app) {
+        return Ok(page_err(app, None, e));
+    }
+    let next = ui::safe_next(ui::query_param(ctx, "next").as_deref());
+    if current_login(ctx, app)?.is_some() {
+        return Ok(ui::redirect(&next));
+    }
+    oidc_begin(app, &next, None)
+}
+
+/// `POST /passkeys/oidc/link` — a signed-in person connects their identity
+/// at the provider to this account. CSRF-protected like every UI POST.
+pub async fn oidc_link(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
+    let login = match require_login(ctx, app) {
+        Ok(l) => l,
+        Err(resp) => return Ok(*resp),
+    };
+    let form = ui::parse_form(&ctx.body);
+    if let Err(e) = require_csrf(ctx, &login, Some(&form)) {
+        return Ok(page_err(app, Some(&login), e));
+    }
+    if let Err(e) = oidc(app) {
+        return Ok(page_err(app, Some(&login), e));
+    }
+    oidc_begin(app, "/passkeys", Some(&login.person.id))
+}
+
+fn oidc_fail(app: &App, status: StatusCode, title: &str, detail: &str) -> Resp {
+    ui::with_cookie(
+        ui::error_page(&app.templates, base(app, None), status, title, detail),
+        oidc_cookie(&app.cfg, "", 0),
+    )
+}
+
+/// `GET /login/oidc/callback?code=&state=` (or `?error=`).
+pub async fn oidc_callback(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {
+    let rt = match oidc(app) {
+        Ok(r) => r,
+        Err(e) => return Ok(page_err(app, None, e)),
+    };
+    let start_again = "Sign in from the beginning: this sign-in attempt is unknown, already \
+                       used, or older than ten minutes.";
+    // 1. The cookie names the attempt; spend it before anything can fail.
+    let Some(id) = oidc_cookie_value(ctx) else {
+        return Ok(oidc_fail(
+            app,
+            StatusCode::BAD_REQUEST,
+            "Sign-in attempt not found",
+            start_again,
+        ));
+    };
+    let Some(row) = app.store.take_oidc_login(&id)? else {
+        return Ok(oidc_fail(
+            app,
+            StatusCode::BAD_REQUEST,
+            "Sign-in attempt not found",
+            start_again,
+        ));
+    };
+    let linking = row.link_person_id.is_some();
+    // 2. The browser that comes back must be the one that left.
+    let state = ui::query_param(ctx, "state").unwrap_or_default();
+    if state.is_empty() || !ui::ct_eq(&crate::oidc::sha256_hex(&state), &row.state_hash) {
+        app.audit.emit(
+            "oidc_login_refused",
+            serde_json::json!({ "reason": "state_mismatch", "linking": linking }),
+        );
+        return Ok(oidc_fail(
+            app,
+            StatusCode::BAD_REQUEST,
+            "Sign-in attempt does not match",
+            "The response from the identity provider does not belong to this browser's sign-in \
+             attempt. Sign in from the beginning.",
+        ));
+    }
+    // 3. The provider said no (or the person cancelled).
+    if let Some(err) = ui::query_param(ctx, "error") {
+        let desc = ui::query_param(ctx, "error_description").unwrap_or_default();
+        app.audit.emit(
+            "oidc_login_refused",
+            serde_json::json!({ "reason": "provider_error", "error": err, "description": desc }),
+        );
+        return Ok(oidc_fail(
+            app,
+            StatusCode::UNAUTHORIZED,
+            "The identity provider did not sign you in",
+            &format!("The provider answered: {err}. Nothing was changed here."),
+        ));
+    }
+    let Some(code) = ui::query_param(ctx, "code").filter(|c| !c.is_empty()) else {
+        return Ok(oidc_fail(
+            app,
+            StatusCode::BAD_REQUEST,
+            "Sign-in response incomplete",
+            "The identity provider sent no authorization code. Sign in from the beginning.",
+        ));
+    };
+    // 4–6. Exchange, verify, gate.
+    let verified = match rt.exchange_code(&code, &row.code_verifier).await {
+        Ok(id_token) => rt.verify_id_token(&id_token, &row.nonce_hash).await,
+        Err(e) => Err(e),
+    };
+    let verified = match verified {
+        Ok(v) => v,
+        Err(crate::oidc::LoginError::Unavailable(d)) => {
+            app.audit.emit(
+                "oidc_login_refused",
+                serde_json::json!({ "reason": "provider_unavailable", "detail": d }),
+            );
+            return Ok(oidc_fail(
+                app,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "The identity provider could not be reached",
+                "Signing in needs the identity provider, and it did not answer. This is not \
+                 about your account; try again in a minute.",
+            ));
+        }
+        Err(crate::oidc::LoginError::InvalidToken(d)) => {
+            app.audit.emit(
+                "oidc_login_refused",
+                serde_json::json!({ "reason": "invalid_token", "detail": d }),
+            );
+            return Ok(oidc_fail(
+                app,
+                StatusCode::UNAUTHORIZED,
+                "The sign-in could not be verified",
+                "What the identity provider returned did not verify. Sign in from the beginning; \
+                 if it happens again, tell whoever runs this server.",
+            ));
+        }
+        Err(crate::oidc::LoginError::NotPermitted(d)) => {
+            app.audit.emit(
+                "oidc_login_denied",
+                serde_json::json!({ "reason": "claims", "detail": d, "idp_iss": rt.cfg.issuer }),
+            );
+            return Ok(oidc_fail(
+                app,
+                StatusCode::FORBIDDEN,
+                "Your account is not permitted to use this Person Server",
+                "You signed in at the identity provider, but your account does not meet this \
+                 server's requirements. Ask whoever runs it if you think it should.",
+            ));
+        }
+    };
+    // 7. The person behind (iss, sub) — never behind email.
+    let existing = app.store.identity(&verified.iss, &verified.sub)?;
+    let person_id = match (existing, &row.link_person_id) {
+        (Some(identity), Some(link)) if &identity.person_id != link => {
+            app.audit.emit(
+                "oidc_link_refused",
+                serde_json::json!({ "reason": "identity_linked_elsewhere", "person": link }),
+            );
+            return Ok(oidc_fail(
+                app,
+                StatusCode::CONFLICT,
+                "That identity is connected to another account",
+                "The identity you signed in with at the provider is already connected to a \
+                 different person here. Nothing was changed.",
+            ));
+        }
+        (Some(identity), _) => identity.person_id,
+        (None, Some(link)) => {
+            if !app.store.link_identity(
+                link,
+                &verified.iss,
+                &verified.sub,
+                verified.email.as_deref(),
+            )? {
+                return Ok(oidc_fail(
+                    app,
+                    StatusCode::CONFLICT,
+                    "That identity is connected to another account",
+                    "Nothing was changed.",
+                ));
+            }
+            app.record(
+                Some(link),
+                "person",
+                "identity_linked",
+                None,
+                serde_json::json!({ "idp_iss": verified.iss, "idp_sub": verified.sub }),
+            );
+            link.clone()
+        }
+        (None, None) if rt.cfg.provision => {
+            let person = app.store.create_person(&verified.display_name)?;
+            app.store.link_identity(
+                &person.id,
+                &verified.iss,
+                &verified.sub,
+                verified.email.as_deref(),
+            )?;
+            app.record(
+                Some(&person.id),
+                "person",
+                "person_provisioned",
+                None,
+                serde_json::json!({ "via": "oidc", "idp_iss": verified.iss, "idp_sub": verified.sub }),
+            );
+            person.id
+        }
+        (None, None) => {
+            app.audit.emit(
+                "oidc_login_denied",
+                serde_json::json!({ "reason": "unknown_identity", "idp_iss": verified.iss, "idp_sub": verified.sub }),
+            );
+            return Ok(oidc_fail(
+                app,
+                StatusCode::FORBIDDEN,
+                "No account for this identity",
+                "You signed in at the identity provider, but no person here is connected to that \
+                 identity and this server does not create accounts on first sign-in. Sign in with \
+                 your passkey and connect the identity from Sign-in methods, or ask whoever runs \
+                 this server.",
+            ));
+        }
+    };
+    let Some(person) = app.store.get_person(&person_id)? else {
+        return Err(ApiError::server_error("linked person is missing"));
+    };
+    if !person.is_active() {
+        app.record(
+            Some(&person.id),
+            "person",
+            "sign_in_refused",
+            None,
+            serde_json::json!({ "method": "oidc", "reason": "deactivated" }),
+        );
+        return Ok(oidc_fail(
+            app,
+            StatusCode::FORBIDDEN,
+            "This account has been deactivated",
+            "Sign-in is refused. Ask whoever runs this server.",
+        ));
+    }
+    // Organisational context, refreshed on every SSO sign-in.
+    if rt.cfg.tenant_claim.is_some() && person.tenant != verified.tenant {
+        app.store
+            .set_person_tenant(&person.id, verified.tenant.as_deref())?;
+    }
+    app.store
+        .touch_identity(&verified.iss, &verified.sub, verified.email.as_deref())?;
+    if linking {
+        // Already signed in; the session stays as it is.
+        return Ok(ui::with_cookie(
+            ui::redirect(&row.next),
+            oidc_cookie(&app.cfg, "", 0),
+        ));
+    }
+    let (sid, _csrf) = app
+        .store
+        .create_session(&person.id, app.cfg.ui.session_ttl_secs)?;
+    app.record(
+        Some(&person.id),
+        "person",
+        "signed_in",
+        None,
+        serde_json::json!({ "method": "oidc", "idp_iss": verified.iss, "idp_sub": verified.sub }),
+    );
+    let resp = ui::with_cookie(
+        ui::redirect(&ui::safe_next(Some(&row.next))),
+        ui::session_cookie(&app.cfg, &sid, app.cfg.ui.session_ttl_secs),
+    );
+    Ok(ui::with_cookie(resp, oidc_cookie(&app.cfg, "", 0)))
 }
 
 pub async fn passkey_add_page(ctx: &ReqCtx, app: &Arc<App>) -> Result<Resp, ApiError> {

@@ -17,6 +17,7 @@ serde.workspace = true
 serde_json.workspace = true
 ed25519-dalek.workspace = true
 sha2.workspace = true
+ring.workspace = true
 hmac.workspace = true
 subtle.workspace = true
 tokio.workspace = true

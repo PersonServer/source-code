@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Passkeys · {{ ps_name }}{% endblock %}
+{% block title %}Sign-in methods · {{ ps_name }}{% endblock %}
 {% block content %}
 <section class="card">
   <h1>Your passkeys</h1>
@@ -12,9 +12,37 @@
         <td>{{ c.created_at | datetime }}</td>
         <td>{% if c.last_used_at %}{{ c.last_used_at | datetime }}{% else %}<span class="muted">never</span>{% endif %}</td>
       </tr>
+    {% else %}
+      <tr><td colspan="3" class="muted">No passkey yet. Add one to keep a way in that does not depend on the identity provider.</td></tr>
     {% endfor %}
     </tbody>
   </table>
   <p><a class="button" href="/passkeys/add">Add a passkey</a></p>
 </section>
+{% if sso %}
+<section class="card">
+  <h1>Single sign-on</h1>
+  {% if identities %}
+  <table>
+    <thead><tr><th>Provider</th><th>Account</th><th>Connected</th><th>Last sign-in</th></tr></thead>
+    <tbody>
+    {% for i in identities %}
+      <tr>
+        <td>{{ i.provider }}</td>
+        <td>{{ i.email or "—" }}</td>
+        <td>{{ i.linked_at | datetime }}</td>
+        <td>{% if i.last_login_at %}{{ i.last_login_at | datetime }}{% else %}<span class="muted">never</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>No account at <strong>{{ sso.provider }}</strong> is connected to you yet. Connect one to sign in with it; your passkeys keep working either way.</p>
+  <form method="post" action="/passkeys/oidc/link">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit" class="primary">Connect {{ sso.provider }}</button>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
 {% endblock %}

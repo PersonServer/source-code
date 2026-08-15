@@ -13,7 +13,7 @@ table { width:100%; border-collapse:collapse; } th, td { text-align:left; paddin
 code { font-size:.9em; background:#f0f0f3; padding:.05em .3em; border-radius:4px; }
 .muted { color:var(--muted); } .ok { color:var(--ok); } .warn { color:var(--danger); }
 button, .button { font:inherit; border-radius:6px; padding:.45rem .9rem; border:1px solid var(--line); background:#fff; cursor:pointer; text-decoration:none; color:var(--fg); }
-button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+button.primary, .button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
 button.danger { color:var(--danger); border-color:var(--danger); }
 button.link { border:none; background:none; color:var(--accent); padding:0; margin-left:1rem; }
 form.inline { display:inline; }

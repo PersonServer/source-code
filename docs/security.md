@@ -93,6 +93,39 @@ The agent's poll of the result is itself signed and bound to the agent
 that made the request; a leaked `/pending/{id}` URL yields `404` to anyone
 else and would in any case yield a token unusable without the agent's key.
 
+## Signing people in: passkeys and single sign-on
+
+A passkey login is a WebAuthn discoverable-credential ceremony against
+psd's own origin. With `person_auth.method = "oidc"` a person may also sign
+in through the organisation's OpenID Connect provider; psd is then a
+Relying Party using Authorization Code + PKCE, and the flow is built so
+that a browser, a token or a callback URL from anywhere else buys nothing:
+
+- Each sign-in attempt is one single-use row named by a `psd_oidc` cookie
+  (`HttpOnly; SameSite=Lax; Secure; Path=/login/oidc`, ten minutes). The
+  callback spends the row **before anything else can fail**, so a callback
+  URL is good exactly once whatever happens next.
+- `state` in the callback must equal the row's — the browser that comes
+  back must be the one that left, so a callback lured from another attempt
+  (login CSRF) fails. `nonce` in the ID token must equal the row's — the
+  token must be the one this attempt asked for, so a replayed token fails.
+- The code is exchanged with the PKCE verifier and `client_secret_basic`
+  over egress admission; the ID token must be signed (RS256/384/512,
+  ES256/384 or EdDSA — never `none`) by a key from the provider's JWKS
+  (discovered at startup, same-origin unless listed, refreshed on an
+  unknown `kid` under the same floor as agent-token keys), with `iss`
+  exact, `aud` naming psd's client, `exp`/`iat` sane.
+- `required_claims` (mandatory) is the gate; a person who authenticates but
+  fails it gets a 403 page and an audit event, and nothing is created.
+- The person is keyed on the provider's `(iss, sub)`, never email.
+- **Authentication is not consent.** An SSO session shortens the walk to
+  the consent screen; the screen still renders and still needs the explicit,
+  CSRF-carrying POST. Nothing in the SSO path can approve an agent.
+- SSO is additive: passkeys keep working. Offboarding is `psd person
+  deactivate` (revoke every binding, end missions, drop sessions, refuse
+  sign-ins), because the provider deactivating someone stops their logins,
+  not their agents.
+
 ## What a token says, and what it cannot be used for
 
 - Person and auth tokens are **Ed25519-signed, key-bound (`cnf`) and
@@ -114,7 +147,7 @@ else and would in any case yield a token unusable without the agent's key.
 
 | Data | Why | How long |
 |---|---|---|
-| Persons and passkey **public** keys | login | until deleted by the operator |
+| Persons and passkey **public** keys; provider identities `(iss, sub)` and a display email; the person's `tenant` | login; organisational context in tokens | until deleted by the operator |
 | Agent bindings and consents | the record of who allowed what | until revoked; revoked rows are kept as history |
 | Directed identifiers | so a `sub` in a resource token can be resolved to the person | as long as the person |
 | Person-token records (`jti`, `ps`, `sub`, `mission_s256`, `tenant`, `exp`, agent) | step 6 of resource-token verification | `exp + resource_token_max_age + slack`, then purged |

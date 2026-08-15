@@ -31,6 +31,7 @@ All milestones **M1–M7** of the [implementation RFC](docs/rfc-psd-implementati
 | ✅ Egress admission on every outbound fetch | HTTPS only, no redirects, no private/loopback, pinned IP, size + time caps |
 | ✅ RFC 9457 problem details, `401` + `Signature-Error`, `403` never negotiates signatures | |
 | ✅ Person + passkey (WebAuthn, pure Rust) | `psd person add` prints a one-time enrolment link; `/enrol/{token}` registers the first passkey; `/login` is a discoverable-credential ceremony; more passkeys from the dashboard |
+| ✅ Enterprise SSO (`person_auth.method: "oidc"`) | psd as an OpenID Connect Relying Party (Authorization Code + PKCE) to Okta / Entra / Google Workspace / Keycloak: discovery at startup, `state`/`nonce` bound to a single-use attempt, ID token verified against the provider's keys, `required_claims` as the mandatory gate, persons keyed on `(iss, sub)` and provisioned just in time, `tenant_claim` → `tenant` in tokens; additive to passkeys; `psd person deactivate` for offboarding |
 | ✅ Relational store (SQLite) | `agent_binding` PRIMARY KEY `(iss, sub)` is the one-agent-one-person invariant; retention (`purge_after`), consent, pending, missions, audit tables ready |
 | ✅ Dashboard | connected agents (agent-attested `platform`/`device` marked unverified) with revoke, activity, passkeys; session cookie + CSRF on every POST; strict CSP, no inline script |
 | ✅ Templates | server-rendered `minijinja`, built-ins embedded, `ui.templates_dir` overrides by file name |
@@ -94,7 +95,7 @@ the file: `PSD_ISSUER`, `PSD_LISTEN`, `PSD_KEYS_FILE`, `PSD_DB_PATH`,
 `PSD_TELEMETRY_ENABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`.
 Unknown fields are hard errors; every value is validated at load with a message
 that says what to change. Backends that are planned but not yet built
-(Postgres, OIDC person auth) are rejected rather than silently ignored. The
+(Postgres) are rejected rather than silently ignored. The
 full reference is at [personserver.dev/docs/configuration](https://personserver.dev/docs/configuration.html).
 
 Key knobs, with the protocol rule behind each:
@@ -117,13 +118,14 @@ Key knobs, with the protocol rule behind each:
 
 ```
 crates/psd/src/
-  main.rs        CLI: serve · keygen · person add|list · invite · agents list|revoke · pending list|approve|deny · example-config · version
+  main.rs        CLI: serve · keygen · person add|list|deactivate|activate · invite · agents list|revoke · pending list|approve|deny · example-config · version
   config.rs      JSON + env, validated
   keys.rs        signing keys, rotation, JWKS, pairwise `sub` derivation
   metadata.rs    aauth-person.json
   reqctx.rs      inbound verification (the one path every agent request takes)
   jwks_cache.rs  issuer discovery: metadata → JWKS, floors and caps
   passkey.rs     WebAuthn RP ceremonies (webauthn_rp) + a test-only software authenticator
+  oidc.rs        OpenID Connect person login (discovery, PKCE, ID-token verification, claims gate) · anyjwk.rs RSA/EC/EdDSA keys (from apd)
   store/         SQLite, plain SQL; schema.sql is the data model
   ui.rs          templates, sessions, CSRF, cookies, security headers
   httpc.rs       egress-hardened HTTP client (from apd)
@@ -150,7 +152,7 @@ its header; if they stay identical they will be extracted into a shared crate.
 ## Development
 
 ```sh
-cargo test                                   # 111 tests, no network needed
+cargo test                                   # 128 tests, no network needed
 cargo clippy --workspace --all-targets       # zero warnings is the bar
 cargo fmt --all -- --check
 ```

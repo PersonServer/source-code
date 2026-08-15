@@ -12,6 +12,7 @@
 //!   psd example-config               print an example config to stdout
 //!   psd version
 
+mod anyjwk;
 mod app;
 mod audit;
 mod config;
@@ -25,6 +26,7 @@ mod keys;
 mod markdown;
 mod metadata;
 mod notify;
+mod oidc;
 mod passkey;
 mod pending;
 mod problem;
@@ -107,6 +109,8 @@ fn print_help() {
          \x20 psd keygen [--keys psd-keys.json] [--rotate] [--prune-days N]\n\
          \x20 psd person add --name \"Alice\" [--config psd.json] [--ttl 900]\n\
          \x20 psd person list [--config psd.json]\n\
+         \x20 psd person deactivate ID [--config psd.json]   (offboard: revoke every agent, refuse logins)\n\
+         \x20 psd person activate ID [--config psd.json]\n\
          \x20 psd invite --person ID [--config psd.json] [--ttl 900]\n\
          \x20 psd agents list [--config psd.json]\n\
          \x20 psd agents revoke ISS SUB [--config psd.json]\n\
@@ -192,17 +196,150 @@ fn run_person(args: &[String]) -> Result<(), String> {
                     .credentials_for_person(&p.id)
                     .map_err(|e| e.to_string())?
                     .len();
+                let idps = st
+                    .identities_for_person(&p.id)
+                    .map_err(|e| e.to_string())?
+                    .len();
                 println!(
-                    "{}\t{}\t{} passkey(s)\tcreated {}",
+                    "{}\t{}\t{}\t{} passkey(s)\t{} sso identit{}\ttenant {}\tcreated {}",
                     p.id,
                     p.display_name,
+                    p.status,
                     creds,
+                    idps,
+                    if idps == 1 { "y" } else { "ies" },
+                    p.tenant.as_deref().unwrap_or("-"),
                     ui::format_utc(p.created_at)
                 );
             }
             Ok(())
         }
-        _ => Err("usage: psd person add --name NAME | psd person list".into()),
+        // Offboarding is deliberate. The identity provider deactivating a
+        // leaver stops their logins; it does not touch the agents acting for
+        // them, which would keep working until their tokens expire. This
+        // does: every binding revoked (with its consents and the outbound
+        // auth-token sweep), every mission ended, every session dropped, and
+        // every future login — passkey or SSO — and enrolment link refused.
+        Some("deactivate") => {
+            let id = args
+                .get(3)
+                .filter(|s| !s.starts_with("--"))
+                .ok_or("usage: psd person deactivate ID")?;
+            let (cfg, st) = open_store(args)?;
+            let person = st
+                .get_person(id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("no person with id {id}"))?;
+            let bindings: Vec<_> = st
+                .bindings_for_person(&person.id)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .filter(|b| b.is_active())
+                .collect();
+            let missions: Vec<_> = st
+                .missions_for_person(&person.id)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .filter(|m| m.is_active())
+                .collect();
+            st.set_person_status(&person.id, "deactivated")
+                .map_err(|e| e.to_string())?;
+            let sessions = st
+                .delete_sessions_for_person(&person.id)
+                .map_err(|e| e.to_string())?;
+            for b in &bindings {
+                st.revoke_binding(&b.agent_iss, &b.agent_sub)
+                    .map_err(|e| e.to_string())?;
+                st.revoke_consents_for_agent(&person.id, &b.agent_iss, &b.agent_sub)
+                    .map_err(|e| e.to_string())?;
+            }
+            st.audit(
+                Some(&person.id),
+                "operator",
+                "person_deactivated",
+                None,
+                &serde_json::json!({
+                    "via": "cli", "bindings_revoked": bindings.len(),
+                    "missions_ended": missions.len(), "sessions_dropped": sessions
+                }),
+            )
+            .map_err(|e| e.to_string())?;
+            println!(
+                "deactivated {} ({}): {} binding(s) revoked, {} mission(s) ending, {} session(s) \
+                 dropped; logins and enrolment links are refused from now on",
+                person.id,
+                person.display_name,
+                bindings.len(),
+                missions.len(),
+                sessions
+            );
+            if !bindings.is_empty() || !missions.is_empty() {
+                let keys = KeySet::load(&cfg.keys_file)?;
+                let audit = audit::Audit::new(cfg.audit_log_file.as_deref())?;
+                let app = App::build(cfg, keys, audit, st)?;
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| e.to_string())?;
+                rt.block_on(async {
+                    let _ = rustls::crypto::ring::default_provider().install_default();
+                    for m in &missions {
+                        let _ = crate::handlers::mission::terminate(
+                            &app, &m.s256, "revoked", "operator",
+                        )
+                        .await;
+                    }
+                    let mut total = revocation::RevocationSweep::default();
+                    for b in &bindings {
+                        let s = revocation::revoke_auth_tokens_for_agent(
+                            &app,
+                            &b.agent_iss,
+                            &b.agent_sub,
+                            "person_deactivated",
+                        )
+                        .await;
+                        total.tokens += s.tokens;
+                        total.notified += s.notified;
+                        total.failed += s.failed;
+                    }
+                    println!(
+                        "auth tokens: {} live, {} resources notified, {} not reachable",
+                        total.tokens, total.notified, total.failed
+                    );
+                });
+            }
+            Ok(())
+        }
+        Some("activate") => {
+            let id = args
+                .get(3)
+                .filter(|s| !s.starts_with("--"))
+                .ok_or("usage: psd person activate ID")?;
+            let (_cfg, st) = open_store(args)?;
+            if !st
+                .set_person_status(id, "active")
+                .map_err(|e| e.to_string())?
+            {
+                return Err(format!("no person with id {id}"));
+            }
+            st.audit(
+                Some(id),
+                "operator",
+                "person_activated",
+                None,
+                &serde_json::json!({ "via": "cli" }),
+            )
+            .map_err(|e| e.to_string())?;
+            println!(
+                "activated {id}; revoked bindings stay revoked (agents must be approved again)"
+            );
+            Ok(())
+        }
+        _ => Err(
+            "usage: psd person add --name NAME | psd person list | psd person deactivate ID | \
+             psd person activate ID"
+                .into(),
+        ),
     }
 }
 
@@ -443,7 +580,18 @@ async fn serve(cfg: Config, keys: KeySet) -> Result<(), String> {
     let insecure = cfg.insecure_dev_mode;
     let db_path = cfg.storage.path.clone();
 
-    let app = App::new(cfg, keys)?;
+    // The organisation's IdP is discovered before anything listens, so a
+    // wrong issuer, an unreachable provider or a missing secret file is a
+    // startup error rather than the first person's login failing.
+    let oidc = if cfg.person_auth.oidc_enabled() {
+        let egress = crate::httpc::EgressPolicy::from_config(cfg.insecure_dev_mode);
+        Some(crate::oidc::OidcRuntime::discover(&cfg, &egress).await?)
+    } else {
+        None
+    };
+    let audit = audit::Audit::new(cfg.audit_log_file.as_deref())?;
+    let store = store::Store::open(&cfg.storage.path).map_err(|e| e.to_string())?;
+    let app = App::build_with(cfg, keys, audit, store, oidc)?;
 
     let listener = TcpListener::bind(&listen)
         .await
@@ -473,6 +621,13 @@ async fn serve(cfg: Config, keys: KeySet) -> Result<(), String> {
             format!("overridden: {}", app.templates.overridden.join(", "))
         }
     );
+    match &app.oidc {
+        Some(o) => eprintln!(
+            "  sign-in:  passkeys + OpenID Connect ({}) · redirect_uri {}",
+            o.cfg.issuer, o.redirect_uri
+        ),
+        None => eprintln!("  sign-in:  passkeys"),
+    }
     eprintln!("  drafts:   {}", TRACKED_DRAFTS.join(", "));
     eprintln!(
         "  note:     AAuth is an IETF Internet-Draft; wire formats may change between revisions"

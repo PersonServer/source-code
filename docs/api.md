@@ -329,9 +329,10 @@ at the issuer origin) and what to leave alone.
 |---|---|
 | `GET /` | dashboard: pending decisions, agents (revoke), missions (end), consents, activity |
 | `GET /login`, `POST /login/options`, `POST /login/finish`, `POST /logout` | passkey sign-in (discoverable credential) |
+| `GET /login/oidc?next=`, `GET /login/oidc/callback`, `POST /passkeys/oidc/link` | single sign-on through the organisation's OpenID Connect provider (when configured); connecting that identity to a signed-in person |
 | `GET /enrol/{token}`, `POST /enrol/{token}/options`, `POST /enrol/{token}/finish` | one-time enrolment: register the first passkey |
 | `GET /consent?code=…`, `GET /consent/{id}`, `POST /consent/{id}` | find a pending request by code; the consent screen; the decision |
 | `POST /agents/revoke`, `POST /missions/end` | revoke a binding; end a mission |
 | `GET /activity` | the full audit record for this person |
-| `GET /passkeys`, `GET /passkeys/add`, `POST /passkeys/options`, `POST /passkeys/finish` | list and add passkeys |
+| `GET /passkeys`, `GET /passkeys/add`, `POST /passkeys/options`, `POST /passkeys/finish` | sign-in methods: list and add passkeys, see connected SSO identities |
 | `GET /static/…` | psd's own CSS and the small WebAuthn script |

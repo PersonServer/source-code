@@ -7,7 +7,7 @@
 //! The two front doors meet only here: `/.well-known/*`, `/person`,
 //! `/token`, `/revoke`, `/mission*`, `/interaction`, `/pending/*` are the
 //! AAuth-signed machine surface; `/`, `/login*`, `/logout`, `/enrol/*`,
-//! `/agents/*`, `/activity`, `/passkeys*`, `/consent/*` are the
+//! `/agents/*`, `/activity`, `/passkeys*`, `/consent/*`, `/login/oidc*` are the
 //! session-authenticated human UI. No handler serves both.
 
 use std::sync::Arc;
@@ -68,6 +68,8 @@ pub(crate) async fn dispatch(
         (&Method::GET, "/login") => uih::login_page(ctx, app).await,
         (&Method::POST, "/login/options") => uih::login_options(ctx, app).await,
         (&Method::POST, "/login/finish") => uih::login_finish(ctx, app).await,
+        (&Method::GET, "/login/oidc") => uih::oidc_start(ctx, app).await,
+        (&Method::GET, "/login/oidc/callback") => uih::oidc_callback(ctx, app).await,
         (&Method::POST, "/logout") => uih::logout(ctx, app).await,
         (&Method::GET, "/activity") => uih::activity(ctx, app).await,
         (&Method::POST, "/agents/revoke") => uih::revoke_agent(ctx, app).await,
@@ -76,6 +78,7 @@ pub(crate) async fn dispatch(
         (&Method::GET, "/passkeys/add") => uih::passkey_add_page(ctx, app).await,
         (&Method::POST, "/passkeys/options") => uih::passkey_add_options(ctx, app).await,
         (&Method::POST, "/passkeys/finish") => uih::passkey_add_finish(ctx, app).await,
+        (&Method::POST, "/passkeys/oidc/link") => uih::oidc_link(ctx, app).await,
         (&Method::GET, "/consent") => uih::consent_entry(ctx, app).await,
 
         _ => {

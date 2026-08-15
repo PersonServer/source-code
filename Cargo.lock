@@ -865,6 +865,7 @@ dependencies = [
  "minijinja",
  "p256",
  "pulldown-cmark",
+ "ring",
  "rusqlite",
  "rustls",
  "serde",

@@ -39,6 +39,9 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 webauthn_rp = { version = "0.3", features = ["serde_relaxed", "custom"] }
 # Test-only software authenticator (ES256).
 p256 = { version = "0.13", features = ["ecdsa"] }
+# RSA / ECDSA / Ed25519 verification of third-party (IdP) ID tokens for OIDC
+# person login. Already in the tree through rustls; used directly here.
+ring = "0.17"
 # Server-rendered HTML with auto-escaping; built-in templates embedded, an
 # override directory optional. Two transitive deps.
 minijinja = "2"

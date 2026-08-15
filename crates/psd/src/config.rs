@@ -160,18 +160,85 @@ impl Default for DirectedSubConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PersonAuthConfig {
-    /// "passkey" (default and only method in this build). "oidc" is planned
-    /// for organisation deployments.
+    /// "passkey" (default): people sign in with passkeys only. "oidc": people
+    /// may *also* sign in through the organisation's OpenID Connect provider
+    /// configured in `oidc` — additive, per person: existing passkeys keep
+    /// working and new ones can still be added, so an operator keeps a
+    /// break-glass passkey when the IdP is down. There is deliberately no
+    /// way to turn passkeys off: that switch's failure mode is silently
+    /// locking people out.
     #[serde(default = "default_passkey")]
     pub method: String,
+    #[serde(default)]
+    pub oidc: Option<OidcConfig>,
 }
 
 impl Default for PersonAuthConfig {
     fn default() -> Self {
         PersonAuthConfig {
             method: default_passkey(),
+            oidc: None,
         }
     }
+}
+
+impl PersonAuthConfig {
+    pub fn oidc_enabled(&self) -> bool {
+        self.method == "oidc"
+    }
+}
+
+/// psd as an OpenID Connect Relying Party (Authorization Code + PKCE) to the
+/// organisation's identity provider, for signing *people* in. Nothing here
+/// touches the agent surface, and an IdP session never decides consent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OidcConfig {
+    /// The provider's issuer URL, e.g. "https://acme.okta.com". Discovery
+    /// (`/.well-known/openid-configuration`) runs at startup and its `issuer`
+    /// must equal this value byte-for-byte.
+    pub issuer: String,
+    /// The client registered at the provider. Its redirect URI is
+    /// `{psd issuer}/login/oidc/callback` (printed at startup).
+    pub client_id: String,
+    /// File holding the client secret (one line). A file for the same reason
+    /// `keys_file` is a file: it stays out of the config and out of `Debug`.
+    pub client_secret_file: String,
+    /// Scopes requested; must include "openid".
+    #[serde(default = "default_oidc_scopes")]
+    pub scopes: Vec<String>,
+    /// ID-token claims a person must present to sign in — claim path (dotted)
+    /// → exact string, trailing-`*` prefix, or an array of those (any-of). An
+    /// array-valued claim such as `groups` satisfies the matcher when any
+    /// element does; an empty array never does. REQUIRED and non-empty: it
+    /// is the authorization gate, and without it every account at the
+    /// provider could sign in (and, with provisioning on, get a person).
+    /// "Everyone in our domain" is written explicitly: {"hd": "acme.com"}.
+    #[serde(default)]
+    pub required_claims: serde_json::Map<String, serde_json::Value>,
+    /// The ID-token claim carrying the organisation, issued into every person
+    /// token as `tenant` (organisational context; never part of the
+    /// identifier).
+    #[serde(default)]
+    pub tenant_claim: Option<String>,
+    /// Claims tried in order for a newly provisioned person's display name.
+    #[serde(default = "default_display_name_claims")]
+    pub display_name_claims: Vec<String>,
+    /// Create a person on first sign-in when none is linked to the identity
+    /// (just-in-time provisioning). Off: only identities an existing person
+    /// has connected from their sign-in-methods page may sign in.
+    #[serde(default = "default_true")]
+    pub provision: bool,
+}
+
+fn default_oidc_scopes() -> Vec<String> {
+    vec!["openid".into(), "profile".into(), "email".into()]
+}
+fn default_display_name_claims() -> Vec<String> {
+    vec!["name".into(), "preferred_username".into(), "email".into()]
+}
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -460,15 +527,63 @@ impl Config {
         match self.person_auth.method.as_str() {
             "passkey" => {}
             "oidc" => {
-                return Err(
-                    "person_auth.method 'oidc' is planned for organisation deployments but not \
-                     implemented in this build; use \"passkey\""
-                        .into(),
-                )
+                let o = self.person_auth.oidc.as_ref().ok_or(
+                    "person_auth.method is \"oidc\" but person_auth.oidc is not configured",
+                )?;
+                let https_ok = o.issuer.starts_with("https://")
+                    || (self.insecure_dev_mode && o.issuer.starts_with("http://"));
+                if !https_ok || o.issuer.ends_with('/') || o.issuer.contains(['?', '#']) {
+                    return Err(
+                        "person_auth.oidc.issuer must be an https:// URL without a trailing \
+                         slash, query or fragment (exactly what the provider's discovery \
+                         document declares as issuer)"
+                            .into(),
+                    );
+                }
+                if o.client_id.trim().is_empty() {
+                    return Err("person_auth.oidc.client_id is required".into());
+                }
+                if o.client_secret_file.trim().is_empty() {
+                    return Err("person_auth.oidc.client_secret_file is required".into());
+                }
+                if !o.scopes.iter().any(|s| s == "openid") {
+                    return Err("person_auth.oidc.scopes must include \"openid\"".into());
+                }
+                if o.required_claims.is_empty() {
+                    return Err(
+                        "person_auth.oidc.required_claims must not be empty: it is the \
+                         authorization gate, and without it every account at the identity \
+                         provider could sign in here (and, with provision on, get a person). \
+                         Say who may sign in explicitly, e.g. {\"hd\": \"acme.com\"} or \
+                         {\"groups\": \"psd-users\"}"
+                            .into(),
+                    );
+                }
+                for (path, matcher) in &o.required_claims {
+                    if path.trim().is_empty() {
+                        return Err("person_auth.oidc.required_claims: empty claim path".into());
+                    }
+                    let ok = match matcher {
+                        serde_json::Value::String(_) => true,
+                        serde_json::Value::Array(a) => a.iter().all(|v| v.is_string()),
+                        _ => false,
+                    };
+                    if !ok {
+                        return Err(format!(
+                            "person_auth.oidc.required_claims['{path}'] must be a string or an \
+                             array of strings"
+                        ));
+                    }
+                }
+                if o.display_name_claims.is_empty() {
+                    return Err(
+                        "person_auth.oidc.display_name_claims must name at least one claim".into(),
+                    );
+                }
             }
             other => {
                 return Err(format!(
-                    "person_auth.method '{other}' is not supported; use \"passkey\""
+                    "person_auth.method '{other}' is not supported; use \"passkey\" or \"oidc\""
                 ))
             }
         }
@@ -690,6 +805,60 @@ mod tests {
             "issuer": "https://ps.example", "auth_token_ttl_secs": 0
         }))
         .is_err());
+    }
+
+    #[test]
+    fn oidc_config_is_validated() {
+        let base = |oidc: serde_json::Value| {
+            serde_json::json!({
+                "issuer": "https://ps.example",
+                "person_auth": { "method": "oidc", "oidc": oidc }
+            })
+        };
+        let good = serde_json::json!({
+            "issuer": "https://acme.okta.com", "client_id": "abc",
+            "client_secret_file": "/etc/psd/oidc-secret",
+            "required_claims": { "groups": "psd-users" }, "tenant_claim": "org_id"
+        });
+        let cfg = parse(base(good.clone())).unwrap();
+        assert!(cfg.person_auth.oidc_enabled());
+        let o = cfg.person_auth.oidc.unwrap();
+        assert_eq!(o.scopes, vec!["openid", "profile", "email"]);
+        assert!(o.provision);
+        // The gate is mandatory.
+        let mut g = good.clone();
+        g["required_claims"] = serde_json::json!({});
+        assert!(parse(base(g))
+            .unwrap_err()
+            .contains("required_claims must not be empty"));
+        let mut g = good.clone();
+        g["required_claims"] = serde_json::json!({ "groups": 42 });
+        assert!(parse(base(g)).unwrap_err().contains("required_claims"));
+        // Issuer shape, scopes, and the block itself.
+        let mut g = good.clone();
+        g["issuer"] = "http://acme.okta.com".into();
+        assert!(parse(base(g)).unwrap_err().contains("issuer"));
+        let mut g = good.clone();
+        g["issuer"] = "https://acme.okta.com/".into();
+        assert!(parse(base(g)).unwrap_err().contains("issuer"));
+        let mut g = good.clone();
+        g["scopes"] = serde_json::json!(["profile"]);
+        assert!(parse(base(g)).unwrap_err().contains("openid"));
+        let mut g = good;
+        g["provision"] = false.into();
+        assert!(!parse(base(g)).unwrap().person_auth.oidc.unwrap().provision);
+        // method=oidc without the block is refused; method=passkey ignores it.
+        assert!(parse(serde_json::json!({
+            "issuer": "https://ps.example", "person_auth": { "method": "oidc" }
+        }))
+        .unwrap_err()
+        .contains("person_auth.oidc"));
+        assert!(
+            !parse(serde_json::json!({ "issuer": "https://ps.example" }))
+                .unwrap()
+                .person_auth
+                .oidc_enabled()
+        );
     }
 
     #[test]
