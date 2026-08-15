@@ -25,7 +25,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target,id=psd-target-${TARGETARCH} \
     cargo build --release --locked --bin psd \
     && strip target/release/psd \
-    && cp target/release/psd /usr/local/bin/psd
+    && cp target/release/psd /usr/local/bin/psd \
+    && mkdir -p /out/var/lib/psd
 
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 COPY --from=builder /usr/local/bin/psd /usr/local/bin/psd
@@ -33,7 +34,14 @@ COPY --from=builder /usr/local/bin/psd /usr/local/bin/psd
 # psd reads its config under /etc/psd and keeps its state (keys file, SQLite
 # database, audit log) under /var/lib/psd — mount a volume there; the
 # database is the record of who allowed what and must survive restarts.
-# WORKDIR is the state dir so relative paths in the config resolve there.
+# The directory is created in the builder and copied in owned by uid 65532
+# (nonroot) so that psd can write there even with NO volume mounted — a
+# first `docker run` must not fail with "unable to open database file".
+# There is no shell in distroless to chown it afterwards, and relying on
+# WORKDIR to create it as the right user depends on the base image's USER
+# and the builder in use. WORKDIR is the state dir so relative paths in the
+# config resolve there.
+COPY --from=builder --chown=65532:65532 /out/var/lib/psd /var/lib/psd
 WORKDIR /var/lib/psd
 EXPOSE 8430
 USER nonroot:nonroot
