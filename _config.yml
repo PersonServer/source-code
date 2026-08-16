@@ -39,6 +39,7 @@ exclude:
   - docs/STATUS.md
   - docs/rfc-psd-implementation.md
   - README.md
+  - CHANGELOG.md
   - LICENSE
   - NOTICE.md
   - Dockerfile
