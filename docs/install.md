@@ -121,6 +121,13 @@ ingress. Three rules, each with a reason:
 - **Pass bodies through unchanged.** Signed requests cover a
   `Content-Digest` of the body; a proxy that re-encodes JSON will break the
   signature. Normal proxies do not.
+- **Let long polls finish.** Agents poll pending requests with
+  `Prefer: wait=N`; psd holds the connection up to 50 seconds. A proxy read
+  timeout below that turns every long poll into a `504` from the proxy —
+  the agent never sees psd's answer. Set it to at least 60 seconds (nginx
+  `proxy_read_timeout 60s;`; ingress-nginx
+  `nginx.ingress.kubernetes.io/proxy-read-timeout: "60"`, which the chart
+  sets by default).
 
 A minimal nginx site:
 
@@ -134,6 +141,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto https;
         proxy_http_version 1.1;
+        proxy_read_timeout 60s;   # Prefer: wait long polls (psd holds up to 50 s)
     }
 }
 ```

@@ -106,7 +106,13 @@ ingress:
   className: ""
   # The proxy MUST preserve the Host header: agents sign `@authority` and psd
   # checks it against the issuer host. Most ingress controllers do by default.
-  annotations: {}
+  # Agents long-poll pending requests with `Prefer: wait` — psd holds the
+  # connection up to 50 s — so the proxy's read timeout must exceed that or
+  # every long poll ends in a 504 from the proxy. These are ingress-nginx's
+  # names; other controllers have equivalents.
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
   # host that serves the issuer origin; must match `issuer`.
   host: ps.example.com
   path: /
