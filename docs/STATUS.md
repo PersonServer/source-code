@@ -92,7 +92,9 @@ the events draft assigns a PS any duty, it is not implemented here).
   mock intermediary only; no live AS exists in the ecosystem.
 - **`POST /token`** (three-party auth tokens, the seven-step resource-token
   verification) — **verified live end to end on 2026-08-16**, against
-  released artefacts: agent from `sandbox.agentprovider.dev` (pre-0.5.0),
+  released artefacts: agent from `sandbox.agentprovider.dev` (`apd 0.2.0`
+  by apd's own reading of its metadata at 04:14 UTC — three releases old,
+  pre-`-11` metadata; the chain did not depend on the AP being current),
   PS `sandbox.personserver.dev` = `psd:0.2.0`, resource `whoami.aauth.dev`
   (a third party). Legs, each observed with a signed request (unsigned
   sees only `signature_required` — the requirements are not discoverable
