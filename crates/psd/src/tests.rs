@@ -2955,6 +2955,45 @@ mod auth_token_tests {
             claims["account"], "acct-7",
             "account copied from the resource token"
         );
+        // A resource still on the pre-11 claim name (`person_token_jti`, as
+        // whoami.aauth.dev emits it live) is understood: same value, same
+        // step-6 check.
+        let rt = res.mint(
+            UI_ISSUER,
+            &sub,
+            &pjti,
+            &jkt,
+            "docs.read",
+            300,
+            serde_json::json!({ "presented_jti": null, "person_token_jti": pjti }),
+        );
+        let (status, body, _) = post_token(
+            &app,
+            &ap,
+            &agent,
+            serde_json::json!({ "resource_token": rt }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        // …but a pre-11 name naming a jti we never issued is still unknown.
+        let rt = res.mint(
+            UI_ISSUER,
+            &sub,
+            &pjti,
+            &jkt,
+            "docs.read",
+            300,
+            serde_json::json!({ "presented_jti": null, "person_token_jti": "pt-nope" }),
+        );
+        let (status, body, _) = post_token(
+            &app,
+            &ap,
+            &agent,
+            serde_json::json!({ "resource_token": rt }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"], "unknown_person_token");
         let rt = res.mint(
             UI_ISSUER,
             &sub,
@@ -3185,7 +3224,7 @@ mod auth_token_tests {
                 "invalid_request",
             ),
             (
-                "missing presented_jti",
+                "missing presented_jti (and no pre-11 person_token_jti either)",
                 ok(serde_json::json!({ "presented_jti": null })),
                 StatusCode::BAD_REQUEST,
                 "invalid_resource_token",

@@ -242,6 +242,18 @@ Conventions: **D-n** = decision; ✅ agreed with the `apd` reviewer;
   whitelist Markdown renderer** on the consent screen, labelled as written by
   the agent and unverified; it is also logged with the issuance.
 
+- **D-76 ✅ The pre-11 resource-token claim name `person_token_jti` is
+  accepted as `presented_jti`.** Found live: `whoami.aauth.dev`, the one
+  third-party resource that issues resource tokens today, verifies a psd
+  person token, then challenges `requirement=auth-token; resource-token=…`
+  whose token carries `person_token_jti` — the name -11 renamed
+  (§Document History: "Renamed the resource token claim person_token_jti
+  to presented_jti … The value is unchanged"). Refusing it with
+  `invalid_resource_token: missing presented_jti` (what `0.1.0` does)
+  turns a rename into a broken flow for zero safety gain: same value, same
+  step-6 resolution against the retained record, same mismatch checks.
+  `presented_jti` is preferred when both are present.
+
 ## Revocation (§Token Revocation)
 
 - **D-43 ✅ `POST /revoke` accepts only `scheme=jwks_uri`** (a server

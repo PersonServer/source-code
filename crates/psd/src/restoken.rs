@@ -142,8 +142,15 @@ pub async fn verify(
         ));
     }
     // 6. presented_jti → retained record, exact match on ps/sub/mission/tenant.
-    let presented_jti =
-        str_claim("presented_jti").ok_or_else(|| invalid("missing presented_jti"))?;
+    //    `person_token_jti` is the claim's name before -11 renamed it
+    //    (§Document History: "Renamed the resource token claim
+    //    person_token_jti to presented_jti … The value is unchanged"), and
+    //    the one live resource today (whoami.aauth.dev) still emits it.
+    //    Same value, same check; accepting the old name costs nothing and
+    //    turns a wire-level rename into interop instead of a refusal.
+    let presented_jti = str_claim("presented_jti")
+        .or_else(|| str_claim("person_token_jti"))
+        .ok_or_else(|| invalid("missing presented_jti"))?;
     let record = app
         .store
         .person_token_record(&presented_jti)?
