@@ -23,6 +23,10 @@
 - **Chart.** `dnsConfig` value, defaulting to `ndots: 1`, because a pod
   search domain plus a wildcard DNS record can resolve an external Agent
   Provider hostname to a private address that egress admission refuses.
+- **Interop.** The pre-11 resource-token claim name `person_token_jti` is
+  accepted as `presented_jti` (whoami.aauth.dev still emits it). Chart:
+  ingress `proxy-read-timeout` 60 s by default so `Prefer: wait` long polls
+  are not cut off by the proxy.
 - Audit: `signed_in` carries `method` (`passkey` / `oidc`); the API
   reference documents the problem-details member as `detail` (it always
   was).

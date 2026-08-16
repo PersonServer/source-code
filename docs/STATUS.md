@@ -91,9 +91,20 @@ the events draft assigns a PS any duty, it is not implemented here).
 - **Four-party AS federation** and **call chaining** — mock Access Server /
   mock intermediary only; no live AS exists in the ecosystem.
 - **`POST /token`** (three-party auth tokens, the seven-step resource-token
-  verification) — mock resources only. `apd`'s conformance client and the
-  live sandbox runs exercised metadata, JWKS and `/person` end to end with a
-  real agent; no live resource has issued psd a resource token.
+  verification) — **partially live** as of 2026-08-16. `whoami.aauth.dev`
+  (a third-party resource) accepted a person token issued by
+  `sandbox.personserver.dev` (`psd:0.1.0`), verified against its JWKS, and
+  answered `401 requirement=auth-token; resource-token=…` — a real
+  resource token naming the PS as `aud`, the person's directed `sub`, and
+  `scope "whoami openid"`. Observed with a *signed* request carrying a real
+  agent token from `sandbox.agentprovider.dev` enrolled with `ps =
+  sandbox.personserver.dev` and `?scope=openid`; an unsigned request sees
+  only `signature_required`, so the requirement is not discoverable by
+  curl. `psd:0.1.0` then refused that resource token with
+  `invalid_resource_token: missing presented_jti`, because whoami still
+  emits the pre-11 name `person_token_jti` (D-76): the seven-step check,
+  consent, and whoami's acceptance of a psd **auth** token remain to be run
+  against a released psd that carries the alias (`0.2.0`).
 - **Missions** — mocks only.
 - **Outbound revocation** to a resource's `revocation_endpoint` — mock
   resource sink only. *Inbound* revocation from a real Agent Provider is
@@ -131,12 +142,13 @@ sandbox at `sandbox.personserver.dev`, and the site.
 The joint statement with `apd`, whose gap list mirrors this one: **the
 agent ↔ Agent Provider and Agent Provider ↔ Person Server paths are
 verified live between two independent implementations; everything
-involving a resource is verified only against code we wrote.** `whoami.aauth.dev`, a third-party
-resource, accepts apd's agent tokens live — strong evidence for the agent
-path — but it is `access_mode: "agent-token"`: no Person Server, no
-resource token, no auth token, so it does nothing for this list. What
-would is a resource whose `access_mode` requires an auth token; none is
-known yet.
+involving a resource is verified only against code we wrote.** Correction
+the same day: `whoami.aauth.dev` turned out to be a counterparty for the
+person-token *and* resource-token paths after all — with `?scope=openid`
+and a signed request it challenges for a person token, verifies the PS's
+token, and issues a resource token (see the `/token` entry above and
+D-76). What remains is the `/token` half itself, blocked only on the
+claim-name alias reaching a released psd.
 
 ## How to check it
 
