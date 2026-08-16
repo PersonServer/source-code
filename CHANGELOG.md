@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Startup says when the database schema was migrated (`schema_migrated`
+  audit event and a log line); the CLI's approval message names what was
+  issued (person token / auth token / mission).
+
 ## 0.2.0 — 2026-08-16
 
 - **Enterprise SSO.** `person_auth.method = "oidc"`: people may also sign in

@@ -527,10 +527,25 @@ fn run_pending(args: &[String]) -> Result<(), String> {
             }
             match consent::approve(&app, &person_id, &pr, "cli")? {
                 consent::ApproveOutcome::Approved { jti, exp } => {
-                    println!(
-                        "approved {id}: person token {jti} issued (exp {}), waiting for the agent's poll",
-                        ui::format_utc(exp)
-                    );
+                    // Say what was issued: a person token, an auth token, a
+                    // mission blob, or a completion — the reader of the log
+                    // should not have to decode the jti prefix.
+                    match pr.kind.as_str() {
+                        "auth" => println!(
+                            "approved {id}: auth token {jti} issued (exp {}), waiting for the agent's poll",
+                            ui::format_utc(exp)
+                        ),
+                        "mission" => println!(
+                            "approved {id}: mission {jti} approved, waiting for the agent's poll"
+                        ),
+                        "mission_completion" => println!(
+                            "approved {id}: mission {jti} completed, the agent's poll will say so"
+                        ),
+                        _ => println!(
+                            "approved {id}: person token {jti} issued (exp {}), waiting for the agent's poll",
+                            ui::format_utc(exp)
+                        ),
+                    }
                     Ok(())
                 }
                 consent::ApproveOutcome::BoundElsewhere { owner } => Err(format!(

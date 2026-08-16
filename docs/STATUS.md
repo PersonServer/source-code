@@ -91,20 +91,27 @@ the events draft assigns a PS any duty, it is not implemented here).
 - **Four-party AS federation** and **call chaining** — mock Access Server /
   mock intermediary only; no live AS exists in the ecosystem.
 - **`POST /token`** (three-party auth tokens, the seven-step resource-token
-  verification) — **partially live** as of 2026-08-16. `whoami.aauth.dev`
-  (a third-party resource) accepted a person token issued by
-  `sandbox.personserver.dev` (`psd:0.1.0`), verified against its JWKS, and
-  answered `401 requirement=auth-token; resource-token=…` — a real
-  resource token naming the PS as `aud`, the person's directed `sub`, and
-  `scope "whoami openid"`. Observed with a *signed* request carrying a real
-  agent token from `sandbox.agentprovider.dev` enrolled with `ps =
-  sandbox.personserver.dev` and `?scope=openid`; an unsigned request sees
-  only `signature_required`, so the requirement is not discoverable by
-  curl. `psd:0.1.0` then refused that resource token with
-  `invalid_resource_token: missing presented_jti`, because whoami still
-  emits the pre-11 name `person_token_jti` (D-76): the seven-step check,
-  consent, and whoami's acceptance of a psd **auth** token remain to be run
-  against a released psd that carries the alias (`0.2.0`).
+  verification) — **verified live end to end on 2026-08-16**, against
+  released artefacts: agent from `sandbox.agentprovider.dev` (pre-0.5.0),
+  PS `sandbox.personserver.dev` = `psd:0.2.0`, resource `whoami.aauth.dev`
+  (a third party). Legs, each observed with a signed request (unsigned
+  sees only `signature_required` — the requirements are not discoverable
+  by curl): (1) `GET whoami/?scope=openid` with the agent token (`ps` claim
+  = the PS) → `401 requirement=person-token`; (2) `POST /person` → `202`,
+  approved at the PS, poll → `aa-person+jwt`; (3) the same GET with the
+  person token in `Signature-Key` → whoami verified it against the PS's
+  JWKS and answered `401 requirement=auth-token; resource-token=…` — a real
+  `aa-resource+jwt` (`aud` = PS, `sub` = the directed sub, `scope "whoami
+  openid"`, `person_token_jti` = the person token's jti, ~268 s); (4)
+  `POST /token` with it → `202` (consent for scope; the seven steps ran on
+  a real resource token, D-76's alias resolving step 6), approved, poll →
+  `aa-auth+jwt` (`iss` PS, `aud` whoami, same `sub`, `scope "whoami
+  openid"`); (5) the GET with the **auth token** in `Signature-Key` →
+  **`200 {"iss":"https://sandbox.personserver.dev","sub":"<the directed
+  sub>"}`**. The same directed `sub` appeared in the person token, the
+  resource token and the auth token. `psd:0.1.0` had refused leg 4
+  (`missing presented_jti`; whoami emits the pre-11 name), which is why the
+  result names `0.2.0`.
 - **Missions** — mocks only.
 - **Outbound revocation** to a resource's `revocation_endpoint` — mock
   resource sink only. *Inbound* revocation from a real Agent Provider is
@@ -119,10 +126,10 @@ the events draft assigns a PS any duty, it is not implemented here).
 - **Enterprise SSO** — fixture-tested against Okta-shaped documents (RS256,
   custom-AS issuer with a path) and a generic ES256 provider; never a live
   tenant. Same standing as `apd`'s Okta path.
-- **v1→v2 database migration** — tested on a synthetic v1 file. The
-  sandbox is pinned to `psd:0.1.0` (schema v1) and will be the first real
-  migration when its tag is bumped; its operators hold a consistent
-  `.backup` of the v1 database for rollback.
+- **v1→v2 database migration** — done for real on the sandbox's 0.2.0
+  roll (2026-08-16): `schema_version` 1 → 2, the one person survived, with
+  a consistent backup taken first. It ran silently; `main` now emits
+  `schema_migrated` and a startup line.
 - **The `unknown_key` mislabelling fix (`d641560`) is on `main` and in
   `:edge`, not in the released `0.1.0`.** The sandbox's incident had a
   precise cause: a Kubernetes search domain plus a wildcard DNS record
@@ -136,19 +143,24 @@ the events draft assigns a PS any duty, it is not implemented here).
 
 Verified live, for contrast: discovery/JWKS/`/person`/pending/consent with
 real agents from `sandbox.agentprovider.dev` (27/27, against the released
-`psd:0.1.0` image), inbound `POST /revoke` from real `apd`, the deployed
-sandbox at `sandbox.personserver.dev`, and the site.
+`psd:0.1.0` image), the full three-party `/token` path with
+`whoami.aauth.dev` (against `psd:0.2.0`), inbound `POST /revoke` from real
+`apd`, the deployed sandbox at `sandbox.personserver.dev` including its
+real v1→v2 migration on the 0.2.0 roll, and the site.
 
 The joint statement with `apd`, whose gap list mirrors this one: **the
 agent ↔ Agent Provider and Agent Provider ↔ Person Server paths are
 verified live between two independent implementations; everything
-involving a resource is verified only against code we wrote.** Correction
+involving a resource is verified only against code we wrote.** Superseded
 the same day: `whoami.aauth.dev` turned out to be a counterparty for the
 person-token *and* resource-token paths after all — with `?scope=openid`
 and a signed request it challenges for a person token, verifies the PS's
-token, and issues a resource token (see the `/token` entry above and
-D-76). What remains is the `/token` half itself, blocked only on the
-claim-name alias reaching a released psd.
+token, issues a resource token, and accepts the auth token the PS mints
+from it (see the `/token` entry above and D-76). **The three-party path —
+agent → Agent Provider → Person Server → third-party resource — is now
+verified live end to end on released artefacts.** Still only against code
+we wrote: missions, four-party federation and call chaining (no live
+Access Server), outbound revocation to a resource, sub-agents, webhooks.
 
 ## How to check it
 
