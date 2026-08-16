@@ -118,6 +118,14 @@ real agents from `sandbox.agentprovider.dev` (27/27, against the released
 `psd:0.1.0` image), inbound `POST /revoke` from real `apd`, the deployed
 sandbox at `sandbox.personserver.dev`, and the site.
 
+The joint statement with `apd`, whose gap list mirrors this one: **the
+agent ↔ Agent Provider and Agent Provider ↔ Person Server paths are
+verified live between two independent implementations; everything
+involving a resource is verified only against code we wrote.** The single
+piece of work that shortens both lists at once is a real resource that
+challenges for an auth token — it would exercise psd's `/token` and the
+seven-step check, and apd's token acceptance and events, in one exchange.
+
 ## How to check it
 
 ```sh
