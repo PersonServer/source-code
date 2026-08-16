@@ -252,7 +252,11 @@ Conventions: **D-n** = decision; ✅ agreed with the `apd` reviewer;
   `invalid_resource_token: missing presented_jti` (what `0.1.0` does)
   turns a rename into a broken flow for zero safety gain: same value, same
   step-6 resolution against the retained record, same mismatch checks.
-  `presented_jti` is preferred when both are present.
+  `presented_jti` is preferred when both are present. Second justification,
+  found the same day: apd's published MCP-server guide had been showing the
+  pre-11 resource-token shape (`agent`/`agent_jkt`, no `ps`/`sub`/
+  `presented_jti`), so resources built from it would emit tokens no PS
+  could resolve — the old name is not only whoami's.
 
 ## Revocation (§Token Revocation)
 
