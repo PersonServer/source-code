@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — unreleased
+## 0.2.0 — 2026-08-16
 
 - **Enterprise SSO.** `person_auth.method = "oidc"`: people may also sign in
   through the organisation's OpenID Connect provider (Authorization Code +
