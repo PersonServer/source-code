@@ -591,6 +591,16 @@ async fn serve(cfg: Config, keys: KeySet) -> Result<(), String> {
     };
     let audit = audit::Audit::new(cfg.audit_log_file.as_deref())?;
     let store = store::Store::open(&cfg.storage.path).map_err(|e| e.to_string())?;
+    if let Some(from) = store.migrated_from {
+        audit.emit(
+            "schema_migrated",
+            serde_json::json!({ "from": from, "to": store::SCHEMA_VERSION, "path": db_path }),
+        );
+        eprintln!(
+            "  storage:  migrated database schema v{from} → v{}",
+            store::SCHEMA_VERSION
+        );
+    }
     let app = App::build_with(cfg, keys, audit, store, oidc)?;
 
     let listener = TcpListener::bind(&listen)

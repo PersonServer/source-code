@@ -22,7 +22,7 @@ use crate::passkey::{NewCredential, StoredCredential};
 const SCHEMA: &str = include_str!("schema.sql");
 /// v1: the M1–M7 schema. v2: person.status / person.tenant, person_identity,
 /// oidc_login (OIDC person login). Older databases are migrated in `open`.
-const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Clone)]
 pub struct StoreError(pub String);
@@ -50,6 +50,10 @@ pub type SResult<T> = Result<T, StoreError>;
 
 pub struct Store {
     conn: Mutex<Connection>,
+    /// Set when `open` migrated an older schema, so startup can say so —
+    /// a silent migration is the one thing an operator watching a roll
+    /// wants to see confirmed.
+    pub migrated_from: Option<i64>,
 }
 
 // ------------------------------------------------------------------ records
@@ -295,6 +299,7 @@ impl Store {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(SCHEMA)?;
+        let mut migrated_from: Option<i64> = None;
         let version: Option<i64> = conn
             .query_row("SELECT version FROM schema_version LIMIT 1", [], |r| {
                 r.get(0)
@@ -316,6 +321,7 @@ impl Store {
                      ALTER TABLE person ADD COLUMN tenant TEXT;
                      UPDATE schema_version SET version = 2;",
                 )?;
+                migrated_from = Some(1);
             }
             Some(v) => {
                 return Err(StoreError(format!(
@@ -326,6 +332,7 @@ impl Store {
         }
         Ok(Store {
             conn: Mutex::new(conn),
+            migrated_from,
         })
     }
 
@@ -2396,6 +2403,7 @@ mod tests {
             .unwrap();
         }
         let s = Store::open(path.to_str().unwrap()).unwrap();
+        assert_eq!(s.migrated_from, Some(1));
         let v: i64 = s
             .with(|c| c.query_row("SELECT version FROM schema_version", [], |r| r.get(0)))
             .unwrap();
@@ -2408,6 +2416,7 @@ mod tests {
         // Reopening a v2 database is a no-op.
         drop(s);
         let s = Store::open(path.to_str().unwrap()).unwrap();
+        assert_eq!(s.migrated_from, None);
         assert!(s.get_person("p-old").unwrap().is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
