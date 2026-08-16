@@ -33,6 +33,91 @@ interaction relay endpoint, permission/audit endpoints,
 `mission_control_endpoint`, resource-initiated interaction, Postgres, OIDC
 person auth.
 
+## Gap list (the honest version, 2026-08-16)
+
+Kept here so "complete" and "known to work" are not confused. Tracks
+`draft-hardt-oauth-aauth-protocol-11` and `draft-hardt-httpbis-signature-key-08`
+only; the events, bootstrap and budgets drafts are not tracked (bootstrap
+and budgets are Agent-Provider-side or out of scope by their own text; if
+the events draft assigns a PS any duty, it is not implemented here).
+
+**1 · Required of a PS by -11 and not done, or partial**
+
+- **Resource-initiated interaction** (§Resource-Initiated Interaction: a
+  resource token carrying an `interaction` claim; the PS is to chain the
+  resource's flow before its own consent). psd refuses such a resource
+  token with `400 invalid_request` and says why. Fails closed and is
+  documented, but the section is written as PS behaviour, not an option —
+  this is the one substantive gap. Deferred because no resource issues
+  such tokens yet.
+- **`prompt=login`** is accepted and recorded but does not force
+  re-authentication of the person's session; `select_account` is a no-op
+  (one person per agent). `consent` and `none` are honoured. `prompt` is
+  OPTIONAL and its semantics deferred to OpenID Core; still partial.
+- **§Mission endpoint errors SHOULD**: repeated `mission_not_found`
+  failures are not rate-limited or security-logged as such (each is a
+  silent constant-time 404). The MUSTs of that section (identical
+  status/body/headers/timing, nothing disclosed before authorization) are
+  met and tested.
+- **§Mission accumulated picture SHOULD**: updates are shown on the
+  dashboard with the description; a *later* consent screen under the same
+  mission shows the mission's description but not its accepted updates.
+- Identity claims beyond `sub` (`email`, `groups`, `roles`) are not issued
+  (`claims_supported: ["sub"]`; `scopes_supported: ["openid"]`); `tenant`
+  is. Metadata says so, which is the protocol's mechanism, but a resource
+  wanting `email` from psd gets a token without it.
+
+**2 · Deliberately excluded, with the reason**
+
+- Clarification chat (`requirement=clarification` from psd), the
+  interaction relay endpoint, permission and audit endpoints,
+  `mission_control_endpoint` — all OPTIONAL, no live party exercises them,
+  absence from metadata is the signal (D-58). An AS's `clarification`,
+  `interaction` and `approval` requirements *are* passed through to the
+  agent in four-party mode.
+- A mission update that materially expands the work is recorded and shown,
+  not re-consented (the person can end the mission).
+- General rate limiting delegated to the ingress; psd enforces only what
+  the draft names (distinct resources per agent per day, interaction-code
+  attempts).
+- Telemetry: config accepted and validated, nothing emitted yet.
+- Postgres, SCIM/SAML, self-service deactivation, `claims_source:
+  userinfo` for group-cap cases — not built until someone needs them.
+- Signing-key protection is a file with mode 0600 and the operator's
+  discipline; no HSM/KMS integration.
+
+**3 · Implemented but never verified against a real counterparty**
+
+- **Four-party AS federation** and **call chaining** — mock Access Server /
+  mock intermediary only; no live AS exists in the ecosystem.
+- **`POST /token`** (three-party auth tokens, the seven-step resource-token
+  verification) — mock resources only. `apd`'s conformance client and the
+  live sandbox runs exercised metadata, JWKS and `/person` end to end with a
+  real agent; no live resource has issued psd a resource token.
+- **Missions** — mocks only.
+- **Outbound revocation** to a resource's `revocation_endpoint` — mock
+  resource sink only. *Inbound* revocation from a real Agent Provider is
+  verified live (real `apd` → real `psd`, twice).
+- **Sub-agent (`subagent_token`) issuance** — mock AP only.
+- **Webhook notifications** — mock receiver only.
+- **Passkeys** — verified in-process with a software authenticator against
+  the real `webauthn_rp` ceremonies; I have not myself confirmed a real
+  browser/authenticator enrolment and login end to end (the sandbox
+  operators may have; treat as unconfirmed).
+- **Enterprise SSO** — fixture-tested against Okta-shaped documents (RS256,
+  custom-AS issuer with a path) and a generic ES256 provider; never a live
+  tenant. Same standing as `apd`'s Okta path.
+- **v1→v2 database migration** — tested on a synthetic v1 file; the
+  sandbox's persistent database will be the first real one when it
+  redeploys.
+- **Helm chart** — lint/template in CI; the sandbox was deployed from the
+  chart directory by its operators, so it has run in one real cluster.
+
+Verified live, for contrast: discovery/JWKS/`/person`/pending/consent with
+real agents from `sandbox.agentprovider.dev` (27/27, against the released
+`psd:0.1.0` image), inbound `POST /revoke` from real `apd`, the deployed
+sandbox at `sandbox.personserver.dev`, and the site.
+
 ## How to check it
 
 ```sh
