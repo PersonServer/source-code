@@ -142,6 +142,18 @@ Caddy does the right thing with `reverse_proxy 127.0.0.1:8430`. On
 Kubernetes, the chart's Ingress preserves `Host` with every mainstream
 controller's defaults.
 
+**Kubernetes DNS and egress admission.** psd refuses to fetch from private
+addresses (see [Security model](security.md#outbound-what-psd-will-fetch)).
+A pod's DNS search domains combined with a wildcard record in your zone
+can make an *external* hostname such as `sandbox.agentprovider.dev` resolve
+to a private address inside the cluster (`sandbox.agentprovider.dev.lab.example`
+matches `*.lab.example`), and every Agent Provider fetch is then refused —
+which the released `0.1.0` reported as `unknown_key`, and current builds
+report as `503 temporarily_unavailable` with a `discovery_unavailable`
+audit event. The fix is on the pod, not in psd: `dnsConfig: { options: [{
+name: ndots, value: "1" }] }` (the chart's `dnsConfig` value), so
+fully-qualified external names are resolved as such.
+
 ## 4 · Serve
 
 ```sh

@@ -10,8 +10,8 @@ Last updated: 2026-08-15. Build: 129 tests, `cargo clippy --workspace
 `github.com/PersonServer/source-code` (main); CI (fmt · clippy · test · helm
 · docker) on every push, `edge` image + chart on main, `release` on `v*`
 tags. Site: `personserver.dev` from this tree via GitHub Pages
-(`_config.yml`, `index.html`, `docs/*.md`); needs the domain's A/AAAA
-records pointed at GitHub Pages to resolve.
+(`_config.yml`, `index.html`, `docs/*.md`), live over HTTPS. Image and
+chart on GHCR are both public.
 
 ## Milestones
 
@@ -101,15 +101,25 @@ the events draft assigns a PS any duty, it is not implemented here).
 - **Sub-agent (`subagent_token`) issuance** — mock AP only.
 - **Webhook notifications** — mock receiver only.
 - **Passkeys** — verified in-process with a software authenticator against
-  the real `webauthn_rp` ceremonies; I have not myself confirmed a real
-  browser/authenticator enrolment and login end to end (the sandbox
-  operators may have; treat as unconfirmed).
+  the real `webauthn_rp` ceremonies. **Confirmed not yet done in a real
+  browser**: the sandbox operators report one person, zero passkeys, and an
+  enrolment link that expired unopened (2026-08-16). A five-minute human
+  task; unverified until someone does it.
 - **Enterprise SSO** — fixture-tested against Okta-shaped documents (RS256,
   custom-AS issuer with a path) and a generic ES256 provider; never a live
   tenant. Same standing as `apd`'s Okta path.
-- **v1→v2 database migration** — tested on a synthetic v1 file; the
-  sandbox's persistent database will be the first real one when it
-  redeploys.
+- **v1→v2 database migration** — tested on a synthetic v1 file. The
+  sandbox is pinned to `psd:0.1.0` (schema v1) and will be the first real
+  migration when its tag is bumped; its operators hold a consistent
+  `.backup` of the v1 database for rollback.
+- **The `unknown_key` mislabelling fix (`d641560`) is on `main` and in
+  `:edge`, not in the released `0.1.0`.** The sandbox's incident had a
+  precise cause: a Kubernetes search domain plus a wildcard DNS record
+  resolved `sandbox.agentprovider.dev` to a private address, egress
+  admission refused it, and `0.1.0` reported that as `unknown_key`. Fixed on
+  the pod with `dnsConfig: {options: [{name: ndots, value: "1"}]}` (15/15
+  since); on `main` the same failure is `503 temporarily_unavailable` plus a
+  `discovery_unavailable` audit event.
 - **Helm chart** — lint/template in CI; the sandbox was deployed from the
   chart directory by its operators, so it has run in one real cluster.
 

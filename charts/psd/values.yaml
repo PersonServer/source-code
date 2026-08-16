@@ -164,6 +164,16 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
+# Pod DNS settings. psd refuses to fetch from private addresses; a search
+# domain plus a wildcard record in your zone can make an external hostname
+# (an Agent Provider's) resolve to a private address inside the cluster and
+# every fetch is then refused. `ndots: 1` makes fully-qualified external
+# names resolve as such. Set to {} to leave the pod's DNS untouched.
+dnsConfig:
+  options:
+    - name: ndots
+      value: "1"
+
 extraEnv: []
 extraVolumes: []
 extraVolumeMounts: []
