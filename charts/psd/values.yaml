@@ -107,9 +107,11 @@ ingress:
   # The proxy MUST preserve the Host header: agents sign `@authority` and psd
   # checks it against the issuer host. Most ingress controllers do by default.
   # Agents long-poll pending requests with `Prefer: wait` — psd holds the
-  # connection up to 50 s — so the proxy's read timeout must exceed that or
-  # every long poll ends in a 504 from the proxy. These are ingress-nginx's
-  # names; other controllers have equivalents.
+  # connection up to 50 s — so the read/request timeout must exceed that at
+  # EVERY hop in front of psd or long polls end in a 504 from the proxy.
+  # These are ingress-nginx's names; a Gateway API HTTPRoute needs
+  # `timeouts.request` / `backendRequest` (Envoy defaults to 15 s), an
+  # APISIX upstream its read/send timeouts.
   annotations:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
